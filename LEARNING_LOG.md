@@ -973,6 +973,41 @@ structure, no decoration.
 
 ---
 
+### Step 10 -- Full-repo AI-artifact cleanup pass
+
+Reviewed every file in the repo for content that reads as generated
+rather than hand-written. Most files were already fine. Three things
+actually needed fixing:
+
+**`Dockerfile` -- stage comment decorators**
+
+The two section comments used `---` on both sides of the label:
+```
+# --- Builder stage: install dependencies into an isolated virtualenv ---
+# --- Final stage: minimal runtime image ---
+```
+This "content between dashes" pattern is a recognizable AI generator
+habit. Real developers write `# Builder:` or nothing. Dropped the
+flanking dashes.
+
+**`THREAT_MODEL.md` -- meta-commentary opening sentences**
+
+R2 and E2 both opened with a sentence explaining why they were in the
+document ("This entry is included to note an existing positive control
+rather than a threat."). That kind of self-referential metadata is an
+AI tell -- a human writing a threat model just writes the control and
+moves on. The "Status: Mitigated" heading already signals it. Removed
+both sentences.
+
+**`THREAT_MODEL.md` -- wrong count in summary**
+
+The summary at the bottom of section 6 said "Mitigated: 6" but the
+table has five mitigated entries (S2, T3, R2, D3, E2). The original
+text listed "S2, T3, R2, D3, E2, and the positive side of R2" --
+double-counting R2. Corrected to 5.
+
+---
+
 ## Phase 1 -- Still to do
 
 - [x] Fix finding-resolution to track dependencies across submissions
@@ -983,5 +1018,6 @@ structure, no decoration.
       (done, THREAT_MODEL.md -- 18 findings, app + pipeline only)
 - [x] Run the seed-and-fix demo against real OSV.dev (done, Step 4 -- real output recorded)
 - [x] Pipeline output cleanup (done, Step 9)
+- [x] Full-repo AI-artifact cleanup pass (done, Step 10)
 - [ ] Known gap, not urgent: a removed (not upgraded) vulnerable
       dependency never auto-resolves

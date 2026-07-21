@@ -1,4 +1,4 @@
-# --- Builder stage: install dependencies into an isolated virtualenv ---
+# Builder: install dependencies into an isolated virtualenv.
 FROM python:3.12-slim AS builder
 
 WORKDIR /build
@@ -10,7 +10,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# --- Final stage: minimal runtime image ---
+# Runtime: copy only the venv, nothing else from the build stage.
 FROM python:3.12-slim
 
 # Non-root by default -- Phase 2's Kyverno policy blocks root containers,

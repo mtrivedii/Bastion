@@ -374,8 +374,6 @@ handled real data.
 **Component:** CI/CD pipeline signing step  
 **Status:** Mitigated
 
-This entry is included to note an existing positive control rather than a threat.
-
 Every image signed via `cosign sign --yes` creates a permanent, public, append-only entry
 in Sigstore's Rekor transparency log. The entry includes the repo, workflow path, commit
 SHA, signer OIDC identity (`https://token.actions.githubusercontent.com`), and timestamp.
@@ -546,8 +544,6 @@ Same mitigation path as S1: add authentication before any real network exposure.
 **Component:** Dockerfile, container runtime  
 **Status:** Mitigated
 
-This entry notes an existing control rather than a threat.
-
 The Dockerfile creates `appuser` (UID 1000, GID 1000) and switches to it before the
 `CMD` instruction. The app process runs as UID 1000, not root (lines 18-19 and 28 of
 the Dockerfile).
@@ -625,7 +621,7 @@ point.
 | E2 | Elevation of Privilege | Container | Code execution exploit gets UID 1000, not root | Low | Medium | Mitigated |
 | E3 | Elevation of Privilege | CI pipeline | Elevated permissions available to all steps in job | Low | High | Accepted risk |
 
-**Mitigated:** 6 (S2, T3, R2, D3, E2, and the positive side of R2)  
+**Mitigated:** 5 (S2, T3, R2, D3, E2)  
 **Accepted gap:** 7 (S1, T2, T4, I1, I3, E1, E3 -- acknowledged, not fixed, reason stated)  
 **Open gap:** 5 (T1, R1, I2, D1, D2 -- no current mitigation, fix path identified)  
 **Partial mitigation:** 1 (S3 -- improved but not fully addressed)

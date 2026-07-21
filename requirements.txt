@@ -1,3 +1,7 @@
+# TEST ONLY -- proves the Trivy/pip-audit gate blocks known-vulnerable deps.
+# Remove before merging. CVE-2020-14343 / GHSA-8q59-q68h-6hv4
+pyyaml==5.3
+
 fastapi==0.139.2
 uvicorn[standard]==0.51.0
 sqlalchemy[asyncio]==2.0.51

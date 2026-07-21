@@ -1,0 +1,12 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "components": [
+    {
+      "type": "library",
+      "name": "pyyaml",
+      "version": "5.3",
+      "purl": "pkg:pypi/pyyaml@5.3"
+    }
+  ]
+}

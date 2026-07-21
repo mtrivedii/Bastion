@@ -61,18 +61,50 @@ async def run_scan(submission_id: int, db: AsyncSession, osv_client: OSVClient) 
                         )
                     )
 
+            # Findings are matched by (package name, ecosystem, vuln_id),
+            # not by raw package_id. This matters because every SBOM
+            # upload creates brand-new Package rows -- package_id alone
+            # can't identify "the same real-world dependency" across two
+            # scans taken on different days (e.g. a CI run before a fix
+            # and another CI run after it). Matching on name+ecosystem
+            # instead lets a finding first recorded against one
+            # submission's package correctly resolve when a *later*
+            # submission's scan of the same dependency no longer reports
+            # it.
+            #
+            # Known limitation: this only checks packages present in the
+            # submission being scanned right now. If a vulnerable
+            # dependency is removed entirely (not upgraded, just deleted)
+            # in a later SBOM, its finding never gets visited again and
+            # stays open forever. Not handled yet -- acceptable gap for
+            # now, worth fixing before relying on this for real metrics.
+            #
+            # This also assumes a single project is being tracked over
+            # time. A multi-project version of this app would need an
+            # explicit project_id to stop unrelated projects' identical
+            # package names from being matched to each other.
             existing_result = await db.execute(
-                select(Finding).where(
-                    Finding.package_id == package.id,
+                select(Finding)
+                .join(Package, Finding.package_id == Package.id)
+                .where(
+                    Package.name == package.name,
+                    Package.ecosystem == package.ecosystem,
                     Finding.resolved_at.is_(None),
                 )
             )
             existing_findings = {f.vuln_id: f for f in existing_result.scalars().all()}
 
-            for vuln_id in found_ids - existing_findings.keys():
-                db.add(
-                    Finding(package_id=package.id, vuln_id=vuln_id, discovered_at=now)
-                )
+            for vuln_id in found_ids:
+                if vuln_id in existing_findings:
+                    # Still open -- re-point it at this scan's package row
+                    # so it shows up when *this* submission's findings are
+                    # queried, while discovered_at stays at its original
+                    # value.
+                    existing_findings[vuln_id].package_id = package.id
+                else:
+                    db.add(
+                        Finding(package_id=package.id, vuln_id=vuln_id, discovered_at=now)
+                    )
 
             for vuln_id, finding in existing_findings.items():
                 if vuln_id not in found_ids:

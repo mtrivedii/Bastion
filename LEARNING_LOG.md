@@ -147,12 +147,90 @@ internet access, rather than assuming it'll just work.
 
 ---
 
+---
+
+### Step 4 — Fixing a real design gap before seeding a vulnerability
+
+**What I was about to do:** add a genuinely vulnerable package to a demo
+SBOM, scan it, fix it, rescan, and confirm the finding shows as resolved
+— proving the "caught and fixed" story for the Phase 5 report.
+
+**What stopped that plan:** the `resolved_at` logic only compared
+findings *within the same submission*. But the real pipeline uploads a
+brand-new SBOM on every CI run — a new submission, with entirely new
+`Package` rows, every time. Nothing ever looked at a previous
+submission's findings when scanning a new one. So the actual flow this
+project depends on (commit with a vulnerability → fix committed → next
+CI run's scan shows it resolved) would never have worked. It would have
+looked fine in a single-submission demo and then silently failed the
+moment real CI ran twice.
+
+**The fix:** findings are now matched by the package's **name and
+ecosystem**, not by the database row ID. A database row ID is only ever
+valid for one submission; the name and ecosystem (e.g. "pyyaml" +
+"PyPI") are what actually identify the same real-world dependency across
+two different scans taken on two different days. When a later scan of
+the same dependency no longer reports a vulnerability that was
+previously open, that finding now gets marked resolved — even though the
+two scans never shared a database row.
+
+**One thing this doesn't yet handle, on purpose:** if a vulnerable
+dependency is removed from the project entirely (rather than upgraded),
+its finding stays open forever, because nothing re-checks a dependency
+that's no longer in the SBOM at all. Not fixed yet — it's a real gap,
+written down here rather than pretended away, and worth revisiting
+before the Phase 5 metrics are treated as fully trustworthy.
+
+**Proof the fix is real, not just claimed:** before committing to it, I
+reverted the change and reran the new test against the old code —
+confirmed it actually fails (`resolved_at` stays `None`) on the old
+logic, and passes on the new logic. A test that can't fail isn't proving
+anything.
+
+**The actual seed:** `PyYAML` version 5.3, which has a real, public,
+well-documented vulnerability — `CVE-2020-14343` / `GHSA-8q59-q68h-6hv4`,
+arbitrary code execution via `full_load()`, fixed in version 5.4. Two
+demo SBOM files now exist in `demo/`: `seed_vulnerable_sbom.json`
+(pyyaml 5.3) and `seed_fixed_sbom.json` (pyyaml 6.0, patched).
+
+**To run the real end-to-end proof** (needs actual internet access to
+OSV.dev, which this working environment doesn't have):
+
+```bash
+uvicorn app.main:app --reload &
+
+# Upload the vulnerable version, note the returned "id"
+curl -X POST http://localhost:8000/sboms \
+  -F "file=@demo/seed_vulnerable_sbom.json;type=application/json"
+
+curl -X POST http://localhost:8000/sboms/<id>/scan
+sleep 3
+curl http://localhost:8000/sboms/<id>/findings | python3 -m json.tool
+# expect: GHSA-8q59-q68h-6hv4, resolved_at: null
+
+# Upload the fixed version as a new submission, note its new "id"
+curl -X POST http://localhost:8000/sboms \
+  -F "file=@demo/seed_fixed_sbom.json;type=application/json"
+
+curl -X POST http://localhost:8000/sboms/<new_id>/scan
+sleep 3
+curl http://localhost:8000/sboms/<id>/findings | python3 -m json.tool
+# expect: same finding, resolved_at now has a real timestamp
+```
+
+This is also your first real discovered_at/resolved_at data point for
+the Phase 5 report.
+
+---
+
 ## Phase 1 — Still to do
 
-- [ ] Seed a real vulnerable dependency on purpose, let the pipeline
-      catch it, fix it, and record discover/resolve timestamps
+- [x] Fix finding-resolution to track dependencies across submissions
+- [ ] Run the seed-and-fix demo against real OSV.dev (commands above)
 - [ ] Build the GitHub Actions pipeline (lint, pytest, Bandit, pip-audit,
       Trivy, Syft SBOM, Cosign signing, push to GHCR)
 - [ ] Write the STRIDE threat model, scoped to what exists right now
       (app + pipeline only — not the AWS pieces, which don't exist yet)
 - [ ] Confirm the Docker image actually builds locally
+- [ ] Known gap, not urgent: a removed (not upgraded) vulnerable
+      dependency never auto-resolves

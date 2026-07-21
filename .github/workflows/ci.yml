@@ -19,9 +19,7 @@ jobs:
       id-token: write   # OIDC token for keyless cosign signing
 
     steps:
-      # ────────────────────────────────────────────────────────────────────────
       # 1. Checkout + Python
-      # ────────────────────────────────────────────────────────────────────────
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -37,35 +35,24 @@ jobs:
       - name: Install CI tooling
         run: pip install ruff bandit pip-audit
 
-      # ────────────────────────────────────────────────────────────────────────
       # 2. Lint
-      # ────────────────────────────────────────────────────────────────────────
       - name: Lint (ruff)
         run: ruff check .
 
-      # ────────────────────────────────────────────────────────────────────────
       # 3. Tests
-      # ────────────────────────────────────────────────────────────────────────
       - name: Test (pytest)
         run: pytest
 
-      # ────────────────────────────────────────────────────────────────────────
-      # 4. Bandit — static security analysis of Python source
-      # ────────────────────────────────────────────────────────────────────────
+      # 4. Bandit -- static security analysis of Python source
       - name: Security scan (bandit)
         run: bandit -r app/
 
-      # ────────────────────────────────────────────────────────────────────────
-      # 5. pip-audit — dependency CVE check
-      # ────────────────────────────────────────────────────────────────────────
+      # 5. pip-audit -- dependency CVE check
       - name: Dependency audit (pip-audit)
         run: pip-audit -r requirements.txt
 
-      # ────────────────────────────────────────────────────────────────────────
-      # 6. Docker image build
-      # GHCR requires lowercase image names. github.repository preserves
-      # the casing from the repo setting, so we normalise it here.
-      # ────────────────────────────────────────────────────────────────────────
+      # 6. Docker build
+      # GHCR requires lowercase image names; github.repository preserves original casing.
       - name: Lowercase image name
         run: |
           echo "IMAGE_NAME=$(echo '${{ github.repository }}' | \
@@ -76,6 +63,8 @@ jobs:
 
       - name: Build image
         uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_SUMMARY: "false"
         with:
           context: .
           push: false
@@ -84,13 +73,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # ────────────────────────────────────────────────────────────────────────
-      # 7. Trivy — image vulnerability scan
-      # ignore-unfixed: only fail on vulnerabilities where a patch exists.
-      # Base-image CVEs with no upstream fix are reported but don't block.
-      # ────────────────────────────────────────────────────────────────────────
+      # 7. Trivy -- only fail on fixable CVEs; unfixable base-image issues are reported but don't block.
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_SKIP_VERSION_CHECK: "true"
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           format: table
@@ -99,11 +86,8 @@ jobs:
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-      # ────────────────────────────────────────────────────────────────────────
-      # 8. Syft — generate CycloneDX SBOM from the image
-      # The action uploads it as a workflow artifact automatically.
-      # Format matches what this app's own /sboms endpoint accepts.
-      # ────────────────────────────────────────────────────────────────────────
+      # 8. Syft -- generate a CycloneDX SBOM from the image, uploaded as a workflow artifact.
+      # The format matches what this app's own /sboms endpoint accepts.
       - name: Generate SBOM (Syft)
         uses: anchore/sbom-action@v0.24.0
         with:
@@ -112,9 +96,7 @@ jobs:
           output-file: sbom.cdx.json
           format: cyclonedx-json
 
-      # ────────────────────────────────────────────────────────────────────────
-      # 9 + 10. Push + sign — main branch only, after all gates pass
-      # ────────────────────────────────────────────────────────────────────────
+      # 9 + 10. Push and sign -- main branch only, after all gates pass.
       - name: Log in to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v4

@@ -193,33 +193,174 @@ arbitrary code execution via `full_load()`, fixed in version 5.4. Two
 demo SBOM files now exist in `demo/`: `seed_vulnerable_sbom.json`
 (pyyaml 5.3) and `seed_fixed_sbom.json` (pyyaml 6.0, patched).
 
-**To run the real end-to-end proof** (needs actual internet access to
-OSV.dev, which this working environment doesn't have):
+**End-to-end proof -- confirmed against real OSV.dev (2026-07-21)**
 
-```bash
-uvicorn app.main:app --reload &
+Run from the repo root with the project venv active
+(`./venv/Scripts/uvicorn app.main:app --host 127.0.0.1 --port 8000`).
+Note: on Windows, `localhost` resolves to IPv6 (`::1`) but uvicorn
+binds to `127.0.0.1`; use the explicit IP in curl.
 
-# Upload the vulnerable version, note the returned "id"
-curl -X POST http://localhost:8000/sboms \
-  -F "file=@demo/seed_vulnerable_sbom.json;type=application/json"
+**Upload the vulnerable SBOM (pyyaml 5.3):**
 
-curl -X POST http://localhost:8000/sboms/<id>/scan
-sleep 3
-curl http://localhost:8000/sboms/<id>/findings | python3 -m json.tool
-# expect: GHSA-8q59-q68h-6hv4, resolved_at: null
-
-# Upload the fixed version as a new submission, note its new "id"
-curl -X POST http://localhost:8000/sboms \
-  -F "file=@demo/seed_fixed_sbom.json;type=application/json"
-
-curl -X POST http://localhost:8000/sboms/<new_id>/scan
-sleep 3
-curl http://localhost:8000/sboms/<id>/findings | python3 -m json.tool
-# expect: same finding, resolved_at now has a real timestamp
+```
+POST /sboms  →  201
+{
+    "id": 1,
+    "filename": "seed_vulnerable_sbom.json",
+    "uploaded_at": "2026-07-21T18:02:53",
+    "package_count": 1,
+    "scan_status": "pending"
+}
 ```
 
-This is also your first real discovered_at/resolved_at data point for
-the Phase 5 report.
+**Trigger scan on submission 1:**
+
+```
+POST /sboms/1/scan  →  202
+{"submission_id": 1, "scan_status": "scanning"}
+```
+
+**Findings after scan completes (8 s, real OSV.dev round-trip):**
+
+```json
+{
+    "submission_id": 1,
+    "scan_status": "completed",
+    "last_scanned_at": "2026-07-21T18:03:02.911246",
+    "findings": [
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "PYSEC-2021-142",
+            "summary": "",
+            "severity": null,
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": null
+        },
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "PYSEC-2020-96",
+            "summary": "",
+            "severity": null,
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": null
+        },
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "GHSA-8q59-q68h-6hv4",
+            "summary": "Improper Input Validation in PyYAML",
+            "severity": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": null
+        },
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "GHSA-6757-jp84-gxfx",
+            "summary": "Improper Input Validation in PyYAML",
+            "severity": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": null
+        }
+    ]
+}
+```
+
+OSV.dev returned 4 findings for pyyaml 5.3, not 1. GHSA-8q59-q68h-6hv4
+(the expected one) is there with `resolved_at: null`. GHSA-6757-jp84-gxfx
+is a separate PyYAML advisory (incomplete fix in 5.3.1, fully fixed in
+5.4). The two PYSEC entries are the PyPA advisory database records for
+the same vulnerabilities; OSV.dev stores both the GHSA and PYSEC IDs as
+separate advisories, and the batch query returns all of them. Empty
+summaries on the PYSEC entries are expected -- OSV.dev often has
+summary text only on the GHSA canonical record.
+
+**Upload the fixed SBOM (pyyaml 6.0) as a new submission:**
+
+```
+POST /sboms  →  201
+{
+    "id": 2,
+    "filename": "seed_fixed_sbom.json",
+    "uploaded_at": "2026-07-21T18:03:29",
+    "package_count": 1,
+    "scan_status": "pending"
+}
+```
+
+**Trigger scan on submission 2, then check its findings:**
+
+```json
+{
+    "submission_id": 2,
+    "scan_status": "completed",
+    "last_scanned_at": "2026-07-21T18:03:36.957604",
+    "findings": []
+}
+```
+
+No findings for pyyaml 6.0. OSV.dev returned no vulnerabilities.
+
+**Re-read findings on submission 1 after submission 2's scan completes:**
+
+```json
+{
+    "submission_id": 1,
+    "scan_status": "completed",
+    "last_scanned_at": "2026-07-21T18:03:02.911246",
+    "findings": [
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "PYSEC-2021-142",
+            "summary": "",
+            "severity": null,
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": "2026-07-21T18:03:36.957604"
+        },
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "PYSEC-2020-96",
+            "summary": "",
+            "severity": null,
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": "2026-07-21T18:03:36.957604"
+        },
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "GHSA-8q59-q68h-6hv4",
+            "summary": "Improper Input Validation in PyYAML",
+            "severity": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": "2026-07-21T18:03:36.957604"
+        },
+        {
+            "package_name": "pyyaml",
+            "package_version": "5.3",
+            "vuln_id": "GHSA-6757-jp84-gxfx",
+            "summary": "Improper Input Validation in PyYAML",
+            "severity": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+            "discovered_at": "2026-07-21T18:03:02.911246",
+            "resolved_at": "2026-07-21T18:03:36.957604"
+        }
+    ]
+}
+```
+
+All four findings on submission 1 now have
+`resolved_at: "2026-07-21T18:03:36.957604"` -- the exact timestamp of
+submission 2's scan completing. None of these packages share a database
+row between the two submissions; the resolution matched on package name
+and ecosystem (pyyaml + PyPI) exactly as designed.
+
+Time to remediate for this data point: 34 seconds (demo), but the
+field is now live and will record real-world values once the CI pipeline
+is submitting SBOMs on every merge. This is the Phase 5 report's first
+real `discovered_at`/`resolved_at` data point.
 
 ---
 
@@ -783,6 +924,41 @@ significantly once the app runs in a real AWS cluster.
 
 ---
 
+### Step 9 -- Pipeline output cleanup
+
+Three small changes to `.github/workflows/ci.yml`, all cosmetic or
+noise-reduction:
+
+**`TRIVY_SKIP_VERSION_CHECK: true` on the Trivy step**
+
+Trivy prints a notice at the start of its output checking whether a
+newer version of the tool is available. That notice goes to stdout and
+shows up in the CI log above the actual scan results, which makes it
+harder to read the table at a glance. Setting this env var suppresses
+it. The variable is documented in Trivy's own config reference. It
+doesn't affect what Trivy scans or what it reports; it only removes
+the version check HTTP call and the resulting notice line.
+
+**`DOCKER_BUILD_SUMMARY: false` on the Build image step**
+
+`docker/build-push-action` v4+ automatically writes a build summary to
+the GitHub Actions job summary page (the panel below the step list).
+For this project that summary adds noise without adding information --
+the Trivy scan and Syft SBOM already cover what's in the image. Setting
+this env var to `"false"` disables the summary generation. Documented in
+the `docker/build-push-action` README.
+
+**Replaced unicode box-drawing dividers with plain comments**
+
+The original pipeline used `# ────...────` lines above and below each
+section label to create visual dividers. They don't render in the GitHub
+Actions UI (only the step `name:` is visible there), and they look like
+something a generator produced rather than something a person typed.
+Replaced with single-line plain comments -- same information, same
+structure, no decoration.
+
+---
+
 ## Phase 1 -- Still to do
 
 - [x] Fix finding-resolution to track dependencies across submissions
@@ -791,6 +967,7 @@ significantly once the app runs in a real AWS cluster.
 - [x] Prove the security gate blocks bad builds (done, Step 7)
 - [x] Write the STRIDE threat model, scoped to what exists right now
       (done, THREAT_MODEL.md -- 18 findings, app + pipeline only)
-- [ ] Run the seed-and-fix demo against real OSV.dev (commands in Step 4)
+- [x] Run the seed-and-fix demo against real OSV.dev (done, Step 4 -- real output recorded)
+- [x] Pipeline output cleanup (done, Step 9)
 - [ ] Known gap, not urgent: a removed (not upgraded) vulnerable
       dependency never auto-resolves

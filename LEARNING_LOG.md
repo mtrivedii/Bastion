@@ -939,6 +939,20 @@ it. The variable is documented in Trivy's own config reference. It
 doesn't affect what Trivy scans or what it reports; it only removes
 the version check HTTP call and the resulting notice line.
 
+**Confirmed in the next CI run (run 29858213242, 2026-07-21):**
+
+The Trivy step log goes directly from:
+```
+Running Trivy with options: trivy image ghcr.io/mtrivedii/bastion:<sha>
+INFO  [vuln] Vulnerability scanning is enabled
+INFO  [secret] Secret scanning is enabled
+```
+...to the scan results. No version-check notice appears anywhere. The
+env var (`TRIVY_SKIP_VERSION_CHECK: true`) is visible in the step's
+environment dump at the top of the log, confirming it was picked up.
+The scan itself ran cleanly (0 CRITICAL/HIGH vulnerabilities across
+all debian and Python packages in the image).
+
 **`DOCKER_BUILD_SUMMARY: false` on the Build image step**
 
 `docker/build-push-action` v4+ automatically writes a build summary to

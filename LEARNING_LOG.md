@@ -223,14 +223,91 @@ the Phase 5 report.
 
 ---
 
+---
+
+### Step 5 — Building and smoke-testing the Docker image
+
+**What was verified:** the multi-stage Dockerfile actually builds into a
+runnable image, the app starts correctly inside it, and the core API
+endpoints work against a containerized process.
+
+**The multi-stage build, and why it matters:**
+
+The Dockerfile has two stages. The builder stage installs all Python
+packages into an isolated virtualenv at `/venv`. The final stage starts
+from the same base image but copies only `/venv` -- no pip, no build
+tools, no compiler. This keeps the shipped image as small as possible
+(322 MB in this case) and removes tooling that an attacker could use if
+they found a path into the container. The build took about 30 seconds
+on first run; subsequent builds that only change app code are much
+faster because Docker caches the dependency layer and only re-runs the
+layers that changed.
+
+**The bug that was found, and what it taught:**
+
+The first run failed at startup with `sqlite3.OperationalError: unable
+to open database file`. The root cause: `WORKDIR /app` in the
+Dockerfile creates the directory as the current build user, which is
+root. The app runs as `appuser` (UID 1000) and the SQLite fallback
+tries to write `drydock.db` into `/app/`. Root owns that directory;
+appuser can't write there.
+
+The fix is one line before the `USER` switch:
+```
+RUN chown -R appuser:appuser /app
+```
+This transfers ownership so the non-root process can write to its own
+working directory. It's a classic Docker pitfall: switching to a
+non-root user doesn't automatically give that user write access to
+directories the build created as root. You have to transfer ownership
+explicitly.
+
+Note that in Kubernetes (Phase 2 onward), `DATABASE_URL` will always
+be set to a Postgres connection string via a Secret, so the SQLite
+fallback never runs there. But the `chown` is still correct because
+any process should own its workdir, and it makes local dev and the
+smoke test work without needing an external database.
+
+**What the smoke test covered:**
+
+1. `docker build` completes cleanly (exit 0, 322 MB final image).
+2. `docker run` starts the process as UID 1000 (`appuser`), not root.
+3. `GET /health` returns `{"status": "ok"}` -- confirms the server is
+   listening and the lifespan startup hook (which creates the database
+   tables) succeeded.
+4. `POST /sboms` with the seed SBOM file returns HTTP 201 with
+   `package_count: 1` and `scan_status: pending` -- confirms
+   multipart file upload parsing, SBOM parsing, and the database write
+   all work inside the container.
+5. `GET /sboms/1/findings` returns empty findings and
+   `last_scanned_at: null` -- correct pre-scan state.
+
+The scan step (`POST /sboms/1/scan`) was not tested in the container
+because it needs real internet access to OSV.dev. That was already
+documented as a known gap in Step 3. The smoke test confirms everything
+except the external network call.
+
+**Base image vulnerabilities:**
+
+The IDE's Docker linter flagged `python:3.12-slim` as containing 1
+critical and 2 high CVEs in the base image layers. This is expected
+and deliberately left for the pipeline to handle: Trivy is the planned
+tool for this in Phase 1's GitHub Actions workflow. Seeing it flagged
+early confirms Trivy will have real findings to report, which is the
+point of including it. The fix when the pipeline is built will be to
+scan the image in CI and either pin to a patched digest or accept
+known base-image findings with a documented exception.
+
+---
+
 ## Phase 1 — Still to do
 
 - [x] Fix finding-resolution to track dependencies across submissions
-- [ ] Run the seed-and-fix demo against real OSV.dev (commands above)
+- [x] Confirm the Docker image actually builds locally (done, one bug fixed)
+- [ ] Run the seed-and-fix demo against real OSV.dev (commands in Step 4)
 - [ ] Build the GitHub Actions pipeline (lint, pytest, Bandit, pip-audit,
       Trivy, Syft SBOM, Cosign signing, push to GHCR)
 - [ ] Write the STRIDE threat model, scoped to what exists right now
-      (app + pipeline only — not the AWS pieces, which don't exist yet)
-- [ ] Confirm the Docker image actually builds locally
+      (app + pipeline only -- not the AWS pieces, which don't exist yet)
 - [ ] Known gap, not urgent: a removed (not upgraded) vulnerable
       dependency never auto-resolves

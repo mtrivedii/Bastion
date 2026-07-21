@@ -23,6 +23,7 @@ ENV PATH="/venv/bin:$PATH"
 
 WORKDIR /app
 COPY app/ ./app/
+RUN chown -R appuser:appuser /app
 
 USER appuser
 

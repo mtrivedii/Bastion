@@ -300,13 +300,288 @@ known base-image findings with a documented exception.
 
 ---
 
+---
+
+### Step 6 -- Building the GitHub Actions CI/CD pipeline
+
+**File:** `.github/workflows/ci.yml`
+
+The pipeline runs on every push to `main` and on every pull request
+targeting `main`. It's a single job with ten stages in sequence, and
+every stage must pass before the next one runs. The push and signing
+steps at the end are conditional: they only execute on a push to
+`main`, not on pull requests. This means a pull request gets the full
+test and security scan, but nothing is published until the code is
+actually merged.
+
+---
+
+**Before writing anything: looking up action versions**
+
+Every action used in the pipeline was looked up against the current
+GitHub Marketplace releases rather than assumed from memory. These
+versions change often and a stale reference is a common way pipelines
+silently break or regress. Confirmed versions used:
+
+| Action | Version | Notes |
+|--------|---------|-------|
+| `actions/checkout` | `@v4` | v7 released July 20, 2026 -- too new |
+| `actions/setup-python` | `@v5` | same reasoning |
+| `docker/setup-buildx-action` | `@v4` | confirmed in build-push README |
+| `docker/build-push-action` | `@v7` | confirmed latest stable |
+| `docker/login-action` | `@v4` | confirmed latest stable |
+| `aquasecurity/trivy-action` | `@v0.36.0` | pinned, see security note below |
+| `anchore/sbom-action` | `@v0.24.0` | confirmed latest |
+| `sigstore/cosign-installer` | `@v4.1.2` | confirmed, installs cosign 3.0.6 |
+
+`actions/checkout` and `actions/setup-python` moved to v7 the day
+before this pipeline was written (July 20, 2026). v7 uses Node.js 24
+as its runtime. v4/v5 use Node.js 20. GitHub has announced Node 20
+deprecation but hasn't removed it -- so v4/v5 still work; they may
+eventually produce deprecation warnings in the logs, at which point
+upgrading to v7 is a one-line change.
+
+`trivy-action` is pinned to a specific version rather than a floating
+`@v0` major tag for a specific reason -- see the security note below.
+
+---
+
+**The supply chain attack on trivy-action (March 2026)**
+
+This came up directly in research for this step. In March 2026 a
+threat actor used compromised credentials to force-push malicious code
+into 76 of 77 version tags in `aquasecurity/trivy-action`. Any
+workflow pinned to an old mutable tag (e.g. `0.28.0` without the `v`
+prefix) was executing credential-stealing malware before any real scan
+ran. The attack harvested SSH keys, cloud credentials, and tokens from
+CI environments.
+
+The safe response was two things: Aqua Security migrated to
+`v`-prefixed tags (`v0.35.0` instead of `0.35.0`) for all releases
+from that point, and they published `v0.35.0` as the first clean
+release post-incident. The latest safe version is `v0.36.0`, which is
+what this pipeline uses.
+
+The lesson for supply chain security: mutable version tags (including
+floating major-version tags like `@v0`) are trust-on-update -- you're
+trusting that whoever controls that tag won't change what it points
+to. Pinning to a commit SHA is the only way to guarantee the code you
+reviewed is the code that runs. For this portfolio pipeline, using the
+specific `v0.36.0` tag is reasonable; the highest-paranoia approach
+would be `aquasecurity/trivy-action@<sha>`. Worth knowing both exist
+and why one is stricter.
+
+---
+
+**Stage 1: checkout and Python setup**
+
+`actions/checkout` fetches the repository code onto the runner.
+`actions/setup-python` installs Python 3.12 and sets it as the
+active version. The `cache: pip` option caches the pip download cache
+between runs, keyed to `requirements.txt`, so the actual package
+downloads are skipped on runs where the file hasn't changed.
+
+The application dependencies (`requirements.txt`) and the CI-only
+tools (`ruff`, `bandit`, `pip-audit`) are installed in separate steps
+so they're easy to tell apart. The CI tools are not included in
+`requirements.txt` because they're not needed inside the Docker image
+-- only on the runner during testing.
+
+---
+
+**Stage 2: Lint (ruff)**
+
+`ruff check .` runs static analysis across all Python files in the
+repo. Ruff's default rule set covers PEP 8 style errors (E rules) and
+pyflakes -- unused imports, undefined names, etc. (F rules). It
+excludes the `venv/` directory by default, so no configuration file
+is needed for this project.
+
+Lint runs before tests because it's faster. If there's a syntax error
+or a clearly broken import, you want to know in five seconds, not
+after the tests have had time to run.
+
+---
+
+**Stage 3: Tests (pytest)**
+
+`pytest` runs the full test suite. The `pytest.ini` file sets
+`asyncio_mode = auto` which is what the async test functions need.
+The tests use an in-memory SQLite database (set up in `conftest.py`)
+so there's no external service dependency and no test isolation
+problems.
+
+Tests run after lint because lint catches things that would also cause
+tests to fail, but faster. Both gates need to pass.
+
+---
+
+**Stage 4: Bandit (static security analysis of Python source)**
+
+Bandit reads the `app/` directory and looks for known insecure
+patterns in the Python code itself: things like hardcoded passwords,
+use of weak crypto, shell injection via `subprocess`, disabling of TLS
+verification, and about 40 other categories. It's reading source code,
+not running it.
+
+This stage is deliberately placed after tests but before the Docker
+build. Tests confirm the code is correct; Bandit confirms it doesn't
+have obvious security defects in the source. If Bandit finds
+something, fixing it before building the image is cleaner than
+building and then having to rebuild.
+
+`bandit -r app/` scans only the application code, not the tests.
+Bandit's B101 rule flags `assert` statements (common in tests, risky
+in production code), so scanning the test files would produce noise.
+
+---
+
+**Stage 5: pip-audit (dependency CVE scan)**
+
+`pip-audit -r requirements.txt` checks every package listed in
+`requirements.txt` against the Python Packaging Advisory Database
+(PyPA). It's asking: "do any of the packages this app depends on have
+known vulnerabilities right now?"
+
+The `-r requirements.txt` argument scans the declared dependencies,
+not the full runner environment (which also includes `ruff`, `bandit`,
+`pip-audit` itself, and their transitive deps -- scanning those would
+add noise that isn't relevant to what actually ships).
+
+pip-audit complements Trivy (stage 7): pip-audit checks the Python
+dependency declarations; Trivy checks the final built image including
+OS packages. Between them, they cover both layers of the dependency
+tree.
+
+---
+
+**Stage 6: Docker build**
+
+Three things happen here:
+
+1. **Lowercase the image name.** GHCR requires all image names to be
+   lowercase. `github.repository` returns the owner/repo name as it
+   exists on GitHub, which preserves the repository's actual casing
+   (e.g. `mtrivedii/Bastion`). The `tr '[:upper:]' '[:lower:]'`
+   command converts it to `mtrivedii/bastion` and writes it to
+   `$GITHUB_ENV` so subsequent steps see the corrected value.
+
+2. **Set up Docker Buildx.** Buildx is Docker's extended build
+   subsystem (BuildKit). `docker/build-push-action` requires it, and
+   `docker/setup-buildx-action` creates and activates a Buildx
+   builder. On GitHub's `ubuntu-latest` runners it's already installed
+   but not necessarily activated as the default builder.
+
+3. **Build the image.** `docker/build-push-action` with `push: false,
+   load: true` builds the image and loads it into the local Docker
+   daemon on the runner -- but does not push it to any registry. The
+   image is tagged with `ghcr.io/...:<git-sha>`. Using the commit SHA
+   as the tag means every image is unambiguously traceable to an exact
+   commit. The `cache-from: type=gha` and `cache-to: type=gha,mode=max`
+   lines use GitHub Actions' built-in cache to store Docker layer
+   cache between runs, which makes repeated builds significantly faster
+   when only the app code changes (the heavy dependencies layer is
+   already cached).
+
+The image is built at this point but not yet pushed. Stages 7 and 8
+scan it while it's still local. This is intentional: scan first, push
+only after all gates pass. Nothing reaches the registry until it's
+been checked.
+
+---
+
+**Stage 7: Trivy (image vulnerability scan)**
+
+Trivy scans the built image for known CVEs in both OS packages
+(Debian packages in the `python:3.12-slim` base) and library packages
+(Python packages in the virtualenv). It produces a table of findings
+and exits with code 1 if any CRITICAL or HIGH severity issues are
+found.
+
+The `ignore-unfixed: true` setting is important. It means Trivy will
+only fail the build for vulnerabilities that have a fix available
+upstream. A CVE in a Debian package that has been patched in a newer
+package version will still fail the build (we could fix it by
+rebuilding from a newer base). A CVE where the Debian maintainers
+haven't released a fix yet is reported in the output but doesn't block
+the pipeline -- there's nothing to do about it.
+
+This gives the pipeline a meaningful gate: it blocks when there's
+something we can actually fix (an outdated base image, an outdated
+Python dependency), but doesn't stay permanently broken because of
+unpatched upstream issues.
+
+The IDE flagged `python:3.12-slim` as having known CVEs when the
+Dockerfile was written (Step 5). The first real Trivy run in CI will
+show exactly which ones, and whether any have fixes available.
+
+---
+
+**Stage 8: Syft / anchore/sbom-action (SBOM generation)**
+
+The `anchore/sbom-action` runs Syft internally to generate a CycloneDX
+JSON SBOM from the just-built image. The format is `cyclonedx-json`,
+which is exactly the format this application's own `/sboms` endpoint
+accepts. This closes the loop on the project's stated narrative: the
+pipeline generates an SBOM that the app it's building can then analyze.
+
+The SBOM is automatically uploaded as a workflow artifact (visible in
+the GitHub Actions run UI) under the name `sbom-<sha>.cdx.json`. This
+creates a per-build artifact trail: every successfully scanned image
+has an SBOM attached to the CI run that produced it.
+
+SBOM generation runs after Trivy because the image needs to be clean
+before we invest in documenting it.
+
+---
+
+**Stages 9-10: Login, push, sign (main branch only)**
+
+These three steps all carry `if: github.event_name == 'push' &&
+github.ref == 'refs/heads/main'`. On a pull request, or on a push to
+any branch other than `main`, they are skipped entirely.
+
+**Login:** `docker/login-action` authenticates to GHCR using
+`github.actor` (the username of whoever triggered the workflow) and
+`secrets.GITHUB_TOKEN` (a short-lived token GitHub automatically
+provides to every workflow run). No stored credentials needed.
+
+**Push:** `docker push` uploads the image that was built and scanned
+in earlier steps. The image is already in the local daemon; the push
+is a transfer to GHCR. Because all the security gates have already
+passed at this point, what gets pushed is the same image that was
+scanned.
+
+**Cosign keyless signing:** `sigstore/cosign-installer` downloads the
+`cosign` binary (v3.0.6 in this case). Then `cosign sign --yes <image>`
+signs the image using GitHub's OIDC token.
+
+How keyless signing works: instead of a private key that has to be
+stored somewhere and could be leaked, cosign requests a short-lived
+signing certificate from Sigstore's Fulcio certificate authority. The
+request includes a GitHub OIDC token that proves "this is a GitHub
+Actions run from workflow X at commit Y in repo Z." Fulcio issues a
+certificate valid for a few minutes, cosign uses it to sign, and the
+signature and certificate go into Sigstore's Rekor public transparency
+log. Anyone can later verify the signature by checking Rekor -- no
+private key, no secret management, full traceability.
+
+The `id-token: write` permission at the job level is what grants the
+workflow access to request that OIDC token. Without it, cosign would
+fail with an auth error.
+
+This is directly consistent with the project's principle of no
+long-lived credentials (the same principle behind using GitHub OIDC
+for AWS access in Phase 2 instead of stored access keys).
+
+---
+
 ## Phase 1 — Still to do
 
 - [x] Fix finding-resolution to track dependencies across submissions
 - [x] Confirm the Docker image actually builds locally (done, one bug fixed)
+- [x] Build the GitHub Actions pipeline (done, .github/workflows/ci.yml)
 - [ ] Run the seed-and-fix demo against real OSV.dev (commands in Step 4)
-- [ ] Build the GitHub Actions pipeline (lint, pytest, Bandit, pip-audit,
-      Trivy, Syft SBOM, Cosign signing, push to GHCR)
 - [ ] Write the STRIDE threat model, scoped to what exists right now
       (app + pipeline only -- not the AWS pieces, which don't exist yet)
 - [ ] Known gap, not urgent: a removed (not upgraded) vulnerable

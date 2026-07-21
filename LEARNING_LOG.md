@@ -578,11 +578,219 @@ for AWS access in Phase 2 instead of stored access keys).
 
 ## Phase 1 — Still to do
 
+---
+
+### Step 7 -- Proving the security gate actually blocks bad builds
+
+**The difference between a gate that runs and a gate that works**
+
+A security scan that exits with code 0 regardless of findings is not
+a gate, it's a log message. To establish that the pipeline is a real
+gate, you need to see it both pass on clean code and fail on known-bad
+code. The first successful CI run proved the pass case. This step
+proves the fail case.
+
+**What was done**
+
+A short-lived branch `test/trivy-gate` was created off main.
+`pyyaml==5.3` was added to `requirements.txt` -- the same package
+used for the app-level seed-and-fix demo in Step 4. CVE-2020-14343 /
+GHSA-8q59-q68h-6hv4 affects all PyYAML versions below 5.4 (arbitrary
+code execution via `yaml.full_load()`). It is a real, public, fully
+documented vulnerability. Adding it deliberately is safe; it only
+matters if the code calls `yaml.full_load()` on untrusted input, and
+no code in this project does that.
+
+A pull request was opened against main. The PR description explicitly
+stated it must not be merged and existed only to trigger CI.
+
+**What the pipeline reported**
+
+The run failed in 33 seconds at stage 5 (pip-audit), with this output:
+
+```
+Found 4 known vulnerabilities in 1 package
+Name   Version ID             Fix Versions
+------ ------- -------------- ------------
+pyyaml 5.3     PYSEC-2020-96  5.3.1
+pyyaml 5.3     PYSEC-2021-142 5.4
+pyyaml 5.3     PYSEC-2021-142 5.4
+pyyaml 5.3     PYSEC-2020-96  5.3.1
+Process completed with exit code 1.
+```
+
+`PYSEC-2020-96` is the PyPA advisory database identifier for
+CVE-2020-14343 (the `full_load()` code execution issue, fix: 5.3.1).
+`PYSEC-2021-142` is a separate PyYAML vulnerability that wasn't fixed
+until 5.4. pip-audit found both.
+
+**Why pip-audit caught it, not Trivy**
+
+pip-audit runs at stage 5. Trivy runs at stage 7. Stage 6 is the
+Docker build. Because every stage runs to completion before the next
+one starts, and because a failing stage stops the job immediately,
+the Docker build never ran. Trivy therefore never ran either -- there
+was no image to scan.
+
+This is correct pipeline behavior. pip-audit checks Python package
+declarations from `requirements.txt` directly, before building
+anything. It's cheaper and faster than building a Docker image and
+then scanning it. Catching a bad dependency at stage 5 (in seconds)
+instead of stage 7 (after a 90-second Docker build) is the whole
+point of having multiple security stages ordered from cheapest to
+most expensive.
+
+In practice, pip-audit and Trivy are complementary, not redundant:
+- pip-audit checks the Python dependency declarations before anything
+  is built.
+- Trivy checks the final built artifact -- OS packages from the base
+  image, and all Python packages as actually installed. Trivy would
+  catch a vulnerability that came in through a transitive dependency
+  that isn't listed in `requirements.txt`, or one in the Debian base
+  image layers that pip-audit has no visibility into.
+
+A vulnerability in a direct Python dependency (like this test) will
+likely be caught by pip-audit first. A vulnerability in a
+base-image OS package, or introduced indirectly through the build
+process, reaches only Trivy.
+
+**What this established**
+
+Two CI runs, two different outcomes:
+
+| Run | Branch | Code state | Result | Stage that decided it |
+|-----|--------|------------|--------|----------------------|
+| 1 | main | clean | pass | all stages green |
+| 2 | test/trivy-gate | pyyaml==5.3 added | fail | pip-audit, stage 5 |
+
+A gate that only ever passes is useless -- you can't tell if it's
+working or just not running. A gate that only ever fails isn't
+deployable. Seeing both outcomes from real CI runs on real code is
+what establishes the gate works.
+
+The PR was closed without merging. The branch was deleted. `main`
+remains clean.
+
+---
+
+### Step 8 -- Writing the STRIDE threat model
+
+**File:** `THREAT_MODEL.md` (repo root)
+
+**What threat modeling is and why it's worth doing now**
+
+A threat model is a structured exercise that asks: what could go wrong,
+and what's already in place to prevent it? STRIDE is the most common
+framework for this: Spoofing, Tampering, Repudiation, Information
+Disclosure, Denial of Service, Elevation of Privilege. You walk through
+each category and ask whether the system has a problem there.
+
+The reason to do this at the end of Phase 1 rather than later: the
+right time to build a model is when a system is small enough to fully
+understand but functional enough that there are real attack surfaces to
+model. In Phase 1, the full system is the FastAPI app and the CI/CD
+pipeline. After Phase 2 and 3 add Kubernetes, AWS, EKS, Helm, ArgoCD,
+and a real load balancer, the system is much more complex. Starting
+the threat model now captures a clean baseline.
+
+**What's in scope**
+
+The FastAPI application -- four endpoints, the OSV.dev integration, the
+Postgres/SQLite database, the background scan task -- and the GitHub
+Actions CI/CD pipeline. The document explicitly does NOT model AWS, EKS,
+Kubernetes, or any Phase 2-3 infrastructure that doesn't exist yet.
+Modeling infrastructure that hasn't been built would be guessing at
+attack surfaces, not observing real ones.
+
+**The 18 threats, and the honest treatment rule**
+
+The threat model catalogs 18 specific findings across all six STRIDE
+categories. The rule for writing it: honest treatment of gaps, not
+sanitized spin. Two things in particular get full disclosure:
+
+1. **No authentication on any endpoint.** Any client that can reach the
+   app can upload SBOMs, trigger scans, and read all findings. There is
+   no API key, no OAuth2, no token of any kind. This is documented as an
+   accepted gap for a single-user portfolio demo, not silently omitted.
+   The document names what the fix would be and says why it's not in
+   yet.
+
+2. **No rate limiting on uploads or scan triggers.** This is a
+   denial-of-service angle on the app itself, and also against OSV.dev
+   as a free public service: enough concurrent scans could make the app
+   flood OSV.dev with requests. Also documented as an open gap with the
+   specific fix identified (409 Conflict when a scan is already running,
+   plus size limits on uploads).
+
+**What the model found is already mitigated**
+
+Six of the 18 findings were already mitigated before the threat model
+was written -- these aren't gaps, they're existing controls worth naming:
+
+- **TLS on OSV.dev calls** (S2): `httpx.AsyncClient` verifies
+  certificates by default. OSV.dev MITM is blocked.
+- **Cosign image signing** (T3): every image pushed to GHCR from the
+  main branch is signed with a keyless Sigstore certificate tied to the
+  pipeline's OIDC identity. A tampered image in GHCR would fail
+  verification.
+- **Cosign/Rekor transparency log** (R2): all signed images have an
+  immutable, public record in Rekor. You can prove exactly which CI run
+  produced any image.
+- **Retry/backoff on OSV.dev** (D3): if OSV.dev is briefly unavailable,
+  the scan fails gracefully and the app keeps serving other requests.
+  It doesn't retry in a tight loop.
+- **Non-root container user** (E2): code execution inside the container
+  gets UID 1000, not root. Multi-stage build removes pip and build
+  tools from the final image, so there's less to work with.
+- **Graceful scan failure** (D3 / E2 overlap): any unhandled exception
+  in the background scan task sets `scan_status = "failed"` and commits.
+  The app doesn't crash or hang.
+
+**The one partially-mitigated finding worth noting**
+
+The CI pipeline's `id-token: write` and `packages: write` permissions
+apply to the entire job, including the stages that don't need them.
+A compromised third-party action that runs in the build or scan steps
+could use those permissions. The correct fix is splitting into two jobs
+(test-and-scan with no elevated permissions, then a separate publish
+job), but that's a known improvement queued for Phase 2 when a real
+deploy step makes the split natural anyway.
+
+**What the model found are open gaps (no mitigation yet)**
+
+Five open gaps identified -- these have documented fix paths, none of
+them require architectural changes to address, and none are surprising
+for a Phase 1 app:
+
+- No TLS on the app itself (T1, I2) -- expected to be handled at
+  Kubernetes ingress in Phase 2.
+- No structured audit log on API operations (R1) -- no one is relying
+  on audit data right now; worth building when there are real users.
+- No rate limiting on uploads (D1) -- simple size check and 429 response
+  at the endpoint level; queued for later.
+- No rate limiting on scan triggers (D2) -- a single-line 409 check
+  (if `scan_status == "scanning"`, reject) would eliminate the main
+  risk; queued for later.
+
+**What changes in Phase 3**
+
+The threat model explicitly lists what is out of scope and why: AWS IAM,
+EKS API server, Kubernetes network policy, Helm/Kyverno, ArgoCD,
+Prometheus/Grafana, ECR, Terraform state. When Phase 3 is complete,
+this document should be revisited -- the application-level findings
+remain valid, but the runtime and delivery trust model changes
+significantly once the app runs in a real AWS cluster.
+
+---
+
+## Phase 1 -- Still to do
+
 - [x] Fix finding-resolution to track dependencies across submissions
 - [x] Confirm the Docker image actually builds locally (done, one bug fixed)
 - [x] Build the GitHub Actions pipeline (done, .github/workflows/ci.yml)
+- [x] Prove the security gate blocks bad builds (done, Step 7)
+- [x] Write the STRIDE threat model, scoped to what exists right now
+      (done, THREAT_MODEL.md -- 18 findings, app + pipeline only)
 - [ ] Run the seed-and-fix demo against real OSV.dev (commands in Step 4)
-- [ ] Write the STRIDE threat model, scoped to what exists right now
-      (app + pipeline only -- not the AWS pieces, which don't exist yet)
 - [ ] Known gap, not urgent: a removed (not upgraded) vulnerable
       dependency never auto-resolves

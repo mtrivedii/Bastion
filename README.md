@@ -4,23 +4,40 @@ A secure delivery platform built around a small app called Drydock. Drydock take
 
 The app is small on purpose. The point of the project is the pipeline and the security controls around it: every build is linted, tested, scanned, turned into an SBOM, signed and only then published. The pipeline produces SBOMs in the same format that Drydock accepts.
 
-**Status:** Phase 1 (app, pipeline, threat model) is done. Kubernetes, Terraform and AWS work is planned and not in this repo yet. See [Roadmap](#roadmap).
+**Status:** the app, pipeline, Helm chart, admission policies, monitoring and a threat model are done and checked in CI. The Helm chart and policies have been validated (lint, schema check, policy tests) but not yet run on a live cluster by me. Terraform for an optional AWS cluster is written and validated but has never been applied. See [What is tested and what is not](#what-is-tested-and-what-is-not).
 
 ## What Drydock does
 
-1. You upload a CycloneDX JSON SBOM.
-2. You trigger a scan. Drydock sends the packages to OSV.dev in batches and stores the vulnerabilities it gets back.
+1. You upload a CycloneDX JSON SBOM, optionally naming a project (`?project=my-app`).
+2. You trigger a scan. Drydock sends the packages to OSV.dev in batches, follows result paging, and stores the vulnerabilities it gets back with a Critical/High/Medium/Low rating calculated from the CVSS vector.
 3. You read the findings report for that SBOM.
-4. When you upload a newer SBOM and scan it, findings that no longer appear are marked as resolved, with a timestamp. That timestamp is the base for time-to-remediate numbers.
+4. When you upload a newer SBOM for the same project and scan it, findings that are gone are marked resolved with a timestamp, and a reason: `fixed` (the package is still there but no longer vulnerable) or `removed` (the package is gone). Those timestamps feed the time-to-remediate numbers.
 
-Findings are matched by package name and ecosystem across uploads, not by upload. This was a bug in the first version: a fix in a later upload never showed as resolved. A test now covers it.
+Findings are matched by project, package name, ecosystem and vulnerability id, not by upload.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/health` | Liveness check |
-| POST | `/sboms` | Upload an SBOM (multipart file field named `file`) |
-| POST | `/sboms/{id}/scan` | Start a scan in the background |
-| GET | `/sboms/{id}/findings` | Findings with discovered and resolved times |
+| GET | `/health` | Liveness check (no API key needed) |
+| POST | `/sboms?project=` | Upload an SBOM (multipart file field named `file`) |
+| GET | `/sboms?project=&limit=` | List submissions |
+| POST | `/sboms/{id}/scan` | Start a scan in the background. Only the newest submission of a project can be scanned |
+| GET | `/sboms/{id}/findings?state=` | Findings (state is all, open or resolved) with severity, discovered time, resolved time and reason |
+| GET | `/projects` | Project names |
+| GET | `/projects/{project}/summary` | Open findings by severity, resolved counts, mean and median time to remediate, oldest open finding |
+| GET | `/metrics` | Prometheus metrics |
+
+### Settings
+
+All optional. Set them as environment variables.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DATABASE_URL` | local SQLite file | Use a Postgres URL for anything shared |
+| `DRYDOCK_API_KEY` | unset | When set, every endpoint except `/health` needs `X-API-Key: <key>` or `Authorization: Bearer <key>` |
+| `DRYDOCK_RATE_LIMIT_PER_MINUTE` | 60 | Per client address, for uploads and scan triggers. 0 turns it off. Counted per process |
+| `DRYDOCK_MAX_UPLOAD_BYTES` | 5000000 | Larger uploads get a 413 |
+| `DRYDOCK_MAX_PACKAGES` | 20000 | SBOMs with more packages get a 413 |
+| `DRYDOCK_LOG_LEVEL` | INFO | |
 
 ## Run it locally
 
@@ -56,25 +73,48 @@ On Windows use `127.0.0.1` rather than `localhost`, because `localhost` can reso
 ## Tests
 
 ```bash
-pytest
+pip install -r requirements-dev.txt
+pytest --cov --cov-fail-under=90
 ```
 
-19 tests cover SBOM parsing, the OSV client (HTTP is faked, including retries on timeouts and 5xx), the endpoints, and finding resolution across uploads. They run on an in-memory database.
+76 tests, about 97 percent line coverage, on an in-memory database. HTTP calls to OSV.dev are faked, including retries, paging and server errors. CI fails below 90 percent.
 
 ## Pipeline
 
-GitHub Actions (`.github/workflows/ci.yml`) runs these steps in order and stops at the first failure:
+`.github/workflows/ci.yml` has three jobs. Each one only starts if the one before it passed.
 
-1. Lint with ruff
-2. Tests with pytest
-3. Static analysis with Bandit
-4. Dependency audit with pip-audit
-5. Docker build (multi-stage, runs as a non-root user)
-6. Image scan with Trivy. Fails on fixable CRITICAL and HIGH findings only
-7. SBOM generation with Syft (CycloneDX, kept as a workflow artifact)
-8. On `main` only: push to GitHub Container Registry and sign the image with Cosign (keyless, using the workflow's OIDC identity)
+1. **Lint, test, static analysis:** ruff, pytest with a coverage gate, Bandit, pip-audit, hadolint.
+2. **Build, scan, smoke test, DAST:** build the image, Trivy (fails on fixable CRITICAL and HIGH), generate a CycloneDX SBOM with Syft, start the container and check it runs as a non-root user with the API key enforced, scan Drydock's own SBOM with Drydock, then an OWASP ZAP API scan against the running container.
+3. **Push, sign, attest** (main only): push to GitHub Container Registry, sign the image digest with Cosign (keyless), attach the SBOM as a signed attestation, and verify the signature.
 
-To check that the gate really blocks things, a throwaway pull request added `pyyaml==5.3`. It failed at pip-audit and never reached the build.
+Other workflows:
+
+- `infra.yml`: `helm lint`, render the chart, kubeconform, Kyverno policy tests, check that the rendered chart passes the policies, Trivy config scan, `terraform validate`, shellcheck.
+- `codeql.yml`: CodeQL on every push and weekly.
+- `scheduled-scan.yml`: weekly rescan, because new CVEs appear after a build.
+- Dependabot for pip, Docker, GitHub Actions and Terraform.
+
+In its first run the Trivy gate found vulnerabilities in pip, setuptools and wheel that ship with the base image. The runtime image does not need them, so they are removed from it.
+
+## Kubernetes
+
+`deploy/helm/drydock` is the chart. The pod runs as non-root with a read-only filesystem, no Linux capabilities, a seccomp profile and resource limits. A default-deny NetworkPolicy only allows DNS, HTTPS out and the database. `deploy/kyverno` holds admission policies with CLI tests, and a policy that requires a valid Cosign signature on the image.
+
+To run all of it on your own computer for free, follow [docs/RUNBOOK.md](docs/RUNBOOK.md). It starts from nothing and needs no cloud account.
+
+`infra/terraform` can build a small EKS cluster, but that costs money and nothing runs it automatically.
+
+## What is tested and what is not
+
+| Part | Checked how |
+|---|---|
+| App | 76 tests, 97 percent coverage, run in CI |
+| Container, pipeline, signing | Run on GitHub Actions on every push to main |
+| Helm chart | `helm lint`, render, schema check and policy checks in CI. **Not installed on a live cluster by me** |
+| Kyverno policies | CLI tests in CI. **Not installed on a live cluster by me** |
+| Terraform | `fmt`, `validate`, Trivy in CI. **Never applied** |
+| Argo CD, Grafana dashboard | Written, **not run** |
+| Scan against the real OSV.dev | The tests fake OSV.dev. The CI self-scan and `scripts/demo.sh` use the real one |
 
 ## Threat model
 
@@ -84,30 +124,24 @@ To check that the gate really blocks things, a throwaway pull request added `pyy
 
 ## Known limits
 
-- The API has no authentication, TLS or rate limiting. Do not expose it to the internet.
-- A vulnerable package that is removed from a later SBOM (instead of upgraded) is never marked as resolved.
-- The severity field stores the first CVSS vector string OSV returns, not a Low/High/Critical rating.
-- All uploads are treated as one project. Two unrelated projects with the same package names would be matched to each other.
-- OSV.dev results for a single package are not paged, so an extremely vulnerable package could show a truncated list.
-
-## Roadmap
-
-| Phase | Content | Status |
-|---|---|---|
-| 1 | App, tests, pipeline with security gates, SBOM, signing, threat model | Done |
-| 2 | Helm chart on a local kind cluster, Terraform foundations on AWS | Planned |
-| 3 | Short-lived EKS cluster built with Terraform, policy enforcement with Kyverno | Planned |
-| 4 | GitOps with ArgoCD, Prometheus and Grafana, ZAP baseline scan in CI | Planned |
-| 5 | Security metrics report and architecture diagram | Planned |
-
-The whole project has a budget of under 20 euros per month, so the EKS cluster is only created for a work session and destroyed afterwards.
+- One shared API key, not per-user accounts. There is no TLS inside the app. Use an ingress with TLS (the chart supports it) or keep the service private.
+- The rate limiter and the "scan already running" guard are per process. Run one replica, or add a shared store first.
+- Scans run inside the process that received the request. If that pod is restarted mid-scan, the submission shows as scanning until the stale-scan timeout passes, then it can be started again.
+- There are no database migrations. Tables are created on start. Changing a model needs a migration tool such as Alembic first.
+- If one SBOM lists the same package twice with different versions, the findings of both are treated as one set.
+- Only the newest submission of a project can be scanned.
 
 ## Layout
 
 ```
-app/            FastAPI app, database models, OSV client, scan logic
+app/            FastAPI app, database models, OSV client, scan, severity and metrics logic
 tests/          pytest suite
 demo/           two sample SBOMs for the seed-and-fix demo
+scripts/        demo.sh (end-to-end demo), CI self-scan
+deploy/         Helm chart, Kyverno policies, kind config, Argo CD, monitoring
+infra/          Terraform for the optional EKS cluster
+docs/           RUNBOOK.md (start from zero, free)
+Makefile        shortcuts for all of the above
 Dockerfile      multi-stage, non-root image
 THREAT_MODEL.md STRIDE analysis
 LEARNING_LOG.md Design decisions and bugs

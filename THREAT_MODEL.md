@@ -21,7 +21,8 @@
    - [Denial of service](#denial-of-service)
    - [Elevation of privilege](#elevation-of-privilege)
 6. [Summary table](#6-summary-table)
-7. [What is not modeled here, and why](#7-what-is-not-modeled-here-and-why)
+7. [Revision 2: changes since the first version](#7-revision-2-changes-since-the-first-version)
+8. [What was not modelled in the first version](#8-what-was-not-modelled-in-the-first-version)
 
 ---
 
@@ -628,7 +629,48 @@ point.
 
 ---
 
-## 7. What is not modeled here, and why
+## 7. Revision 2: changes since the first version
+
+Sections 1 to 6 describe the first version of the app. This section records what has changed. Nothing here was tested against a live cluster; the Kubernetes items are based on the chart and policies as validated in CI.
+
+### Status changes
+
+| ID | New status | What changed |
+|----|-----------|--------------|
+| S1, E1 | Partial | An optional API key (`DRYDOCK_API_KEY`) protects every endpoint except `/health`, compared in constant time. There is still one shared key, so no per-user identity and no roles. If the key is not set, the app is open, as before. |
+| I1 | Partial | Same API key. Anyone with the key can read all projects. |
+| D1 | Mitigated for single process | Upload size limit, package count limit, per-client rate limit. The rate limiter is in memory, so it is per pod and resets on restart. |
+| D2 | Mitigated for single process | Scan triggers are rate limited, only one scan can run per submission, and only the newest submission of a project can be scanned. |
+| T1, I2 | Partial | The app still speaks plain HTTP. The chart can put it behind an ingress with TLS. Whether TLS is actually used depends on how it is deployed. |
+| E2 | Strengthened | Besides non-root: read-only root filesystem, all capabilities dropped, no privilege escalation, seccomp profile, resource limits. Kyverno policies refuse pods that do not meet this. |
+| T3 | Strengthened | The pipeline signs by digest, attaches the SBOM as a signed attestation and verifies the signature. A Kyverno policy can require that signature at admission. |
+| R1 | Open | There is still no audit log of who called what. |
+
+### New risks
+
+| ID | Risk | Control | Status |
+|----|------|---------|--------|
+| K1 | Pod to pod traffic in the cluster | Default-deny NetworkPolicy, allowing only DNS, HTTPS out and the database. NetworkPolicy only works if the cluster's network plugin enforces it. The local setup installs Calico for that reason. | Mitigated if enforced |
+| K2 | Unsafe workloads admitted to the cluster | Kyverno policies for tags, non-root, hardened containers, resource limits and registry allow-list, with CLI tests | Mitigated for these checks. Kyverno must be installed and healthy |
+| K3 | Secrets in the cluster | The chart generates the API key and database password and keeps them across upgrades. They are ordinary Kubernetes Secrets, readable by anyone with access to the namespace, and are not encrypted by the chart. | Accepted gap |
+| K4 | Built-in Postgres is a single pod with one volume and no backup | Meant for development. Use a managed database for anything you care about. | Accepted gap |
+| K5 | Argo CD with automated sync applies whatever is on `main` | Pushes to main are not reviewed (single maintainer). Branch protection would help. | Accepted gap |
+| K6 | Public Kubernetes API endpoint on the optional EKS cluster | Limited to `api_allowed_cidrs`, which has no default. Accepted in `infra/terraform/.trivyignore`. | Accepted risk |
+| K7 | Terraform state | Local state file, git-ignored. It can contain sensitive values. A remote backend with encryption is the next step if the cluster is used for real. | Accepted gap |
+| K8 | Prometheus scrape of `/metrics` | The endpoint needs the API key. The chart sends it as a bearer token from the Secret. | Mitigated |
+
+### Still not modelled
+
+- AWS IAM, IRSA and ECR (the Terraform creates no IAM roles for workloads).
+- Grafana credentials beyond the local development password in the values file.
+- Anything that happens on a real cluster, since none has been run.
+
+---
+
+## 8. What was not modelled in the first version
+
+Kept for history. Items 1 to 8 were future work at that time:
+
 
 The following are real attack surfaces that will exist once later phases are built, but
 are not in scope for this document because the infrastructure does not exist yet:

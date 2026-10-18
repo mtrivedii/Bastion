@@ -1,0 +1,14 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "drydock.fullname" . }}
+  labels:
+    {{- include "drydock.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "drydock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+{{- end }}

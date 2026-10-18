@@ -1,0 +1,11 @@
+# Values for a local kind cluster. Not for anything shared.
+image:
+  repository: ghcr.io/mtrivedii/bastion
+  tag: local
+  pullPolicy: Never   # the image is loaded into kind with `kind load docker-image`
+
+ingress:
+  enabled: false
+
+monitoring:
+  enabled: false

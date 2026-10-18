@@ -1,0 +1,67 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-hardened-container
+  annotations:
+    policies.kyverno.io/title: Containers must be locked down
+    policies.kyverno.io/description: >-
+      Read-only root filesystem, no privilege escalation, no privileged mode,
+      all capabilities dropped.
+spec:
+  background: true
+  rules:
+    - name: read-only-root-filesystem
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [drydock]
+      validate:
+        failureAction: Enforce
+        message: "Every container needs securityContext.readOnlyRootFilesystem: true."
+        pattern:
+          spec:
+            =(initContainers):
+              - securityContext:
+                  readOnlyRootFilesystem: true
+            containers:
+              - securityContext:
+                  readOnlyRootFilesystem: true
+    - name: no-privilege-escalation
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [drydock]
+      validate:
+        failureAction: Enforce
+        message: "Every container needs securityContext.allowPrivilegeEscalation: false and must not be privileged."
+        pattern:
+          spec:
+            =(initContainers):
+              - securityContext:
+                  allowPrivilegeEscalation: false
+                  =(privileged): false
+            containers:
+              - securityContext:
+                  allowPrivilegeEscalation: false
+                  =(privileged): false
+    - name: drop-all-capabilities
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [drydock]
+      validate:
+        failureAction: Enforce
+        message: "Every container must drop ALL capabilities."
+        pattern:
+          spec:
+            =(initContainers):
+              - securityContext:
+                  capabilities:
+                    drop: ["ALL"]
+            containers:
+              - securityContext:
+                  capabilities:
+                    drop: ["ALL"]

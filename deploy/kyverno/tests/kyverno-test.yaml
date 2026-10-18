@@ -1,0 +1,111 @@
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: drydock-policies
+policies:
+- ../policies/disallow-latest-tag.yaml
+- ../policies/require-non-root.yaml
+- ../policies/require-hardened-container.yaml
+- ../policies/require-resource-limits.yaml
+- ../policies/restrict-image-registries.yaml
+resources:
+- resources.yaml
+results:
+- policy: disallow-latest-tag
+  rule: require-image-tag
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: disallow-latest-tag
+  rule: require-image-tag
+  kind: Pod
+  resources:
+  - bad-no-tag
+  result: fail
+- policy: disallow-latest-tag
+  rule: no-latest-tag
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: disallow-latest-tag
+  rule: no-latest-tag
+  kind: Pod
+  resources:
+  - bad-latest
+  result: fail
+- policy: require-non-root
+  rule: run-as-non-root
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: require-non-root
+  rule: run-as-non-root
+  kind: Pod
+  resources:
+  - bad-root
+  - bad-root-user
+  result: fail
+- policy: require-hardened-container
+  rule: read-only-root-filesystem
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: require-hardened-container
+  rule: read-only-root-filesystem
+  kind: Pod
+  resources:
+  - bad-writable-fs
+  result: fail
+- policy: require-hardened-container
+  rule: no-privilege-escalation
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: require-hardened-container
+  rule: no-privilege-escalation
+  kind: Pod
+  resources:
+  - bad-privesc
+  - bad-privileged
+  result: fail
+- policy: require-hardened-container
+  rule: drop-all-capabilities
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: require-hardened-container
+  rule: drop-all-capabilities
+  kind: Pod
+  resources:
+  - bad-caps
+  result: fail
+- policy: require-resource-limits
+  rule: limits-set
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: require-resource-limits
+  rule: limits-set
+  kind: Pod
+  resources:
+  - bad-no-limits
+  result: fail
+- policy: restrict-image-registries
+  rule: allowed-registries
+  kind: Pod
+  resources:
+  - good-pod
+  result: pass
+- policy: restrict-image-registries
+  rule: allowed-registries
+  kind: Pod
+  resources:
+  - bad-registry
+  result: fail

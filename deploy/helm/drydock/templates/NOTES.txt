@@ -1,0 +1,16 @@
+Drydock is installed as {{ include "drydock.fullname" . }}.
+
+Reach it from your machine:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "drydock.fullname" . }} 8000:{{ .Values.service.port }}
+
+Read the generated API key:
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "drydock.secretName" . }} -o jsonpath='{.data.api-key}' | base64 -d
+
+Then:
+  curl -H "X-API-Key: $KEY" http://127.0.0.1:8000/projects
+{{- if .Values.networkPolicy.enabled }}
+
+Network policies are on. A port-forward still works, because it goes through the
+kubelet and not through the pod network, but other pods can only reach the API
+from these namespaces: {{ join ", " .Values.networkPolicy.ingressNamespaces }}.
+{{- end }}

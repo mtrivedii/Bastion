@@ -1,0 +1,37 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: verify-image-signature
+  annotations:
+    policies.kyverno.io/title: Only images signed by this project's pipeline
+    policies.kyverno.io/description: >-
+      The CI pipeline signs each image with Cosign using its GitHub Actions
+      identity (no long-lived key). This policy checks that signature when a pod
+      is created and rewrites the tag to the verified digest.
+      Cannot be tested offline: it needs a cluster that can reach ghcr.io and the
+      Sigstore services.
+spec:
+  background: false
+  webhookConfiguration:
+    failurePolicy: Fail
+  rules:
+    - name: verify-keyless-signature
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [drydock]
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/mtrivedii/bastion*"
+          failureAction: Enforce
+          mutateDigest: true
+          verifyDigest: true
+          required: true
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: "https://token.actions.githubusercontent.com"
+                    subjectRegExp: "^https://github.com/mtrivedii/Bastion/.github/workflows/ci.yml@refs/heads/main$"
+                    rekor:
+                      url: https://rekor.sigstore.dev

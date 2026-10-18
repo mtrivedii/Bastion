@@ -1,0 +1,27 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: restrict-image-registries
+  annotations:
+    policies.kyverno.io/title: Images only from known places
+    policies.kyverno.io/description: >-
+      The application image comes from this project's GitHub registry. The
+      development database uses the official Postgres image.
+spec:
+  background: true
+  rules:
+    - name: allowed-registries
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [drydock]
+      validate:
+        failureAction: Enforce
+        message: "Images must come from ghcr.io/mtrivedii/ or be the official postgres image."
+        pattern:
+          spec:
+            =(initContainers):
+              - image: "ghcr.io/mtrivedii/* | postgres:* | docker.io/library/postgres:*"
+            containers:
+              - image: "ghcr.io/mtrivedii/* | postgres:* | docker.io/library/postgres:*"

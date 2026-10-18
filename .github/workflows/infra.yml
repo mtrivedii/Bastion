@@ -1,0 +1,77 @@
+name: Infrastructure checks
+
+on:
+  push:
+    branches: [main, ci-test]
+    paths: ["deploy/**", "scripts/**", "Makefile", ".github/workflows/infra.yml"]
+  pull_request:
+    paths: ["deploy/**", "scripts/**", "Makefile"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  helm-and-policies:
+    name: Helm chart and Kyverno policies
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          curl -fsSL https://github.com/kyverno/kyverno/releases/download/v1.12.6/kyverno-cli_v1.12.6_linux_x86_64.tar.gz | tar xz kyverno
+          sudo mv kubeconform kyverno /usr/local/bin/
+
+      - name: helm lint
+        run: |
+          helm lint deploy/helm/drydock
+          helm lint deploy/helm/drydock -f deploy/helm/drydock/values-kind.yaml
+
+      - name: Render the chart
+        run: |
+          mkdir -p out
+          helm template drydock deploy/helm/drydock -f deploy/helm/drydock/values-kind.yaml > out/kind.yaml
+          helm template drydock deploy/helm/drydock \
+            --set ingress.enabled=true --set monitoring.enabled=true \
+            --set image.tag=1.0.0 > out/full.yaml
+
+      - name: kubeconform (core resources)
+        run: |
+          kubeconform -strict -summary -ignore-missing-schemas out/kind.yaml
+          kubeconform -strict -summary -ignore-missing-schemas out/full.yaml
+
+      - name: Kyverno policy tests
+        run: kyverno test deploy/kyverno/tests
+
+      - name: Rendered chart must pass the admission policies
+        run: |
+          for f in out/kind.yaml out/full.yaml; do
+            kyverno apply deploy/kyverno/policies/disallow-latest-tag.yaml \
+              deploy/kyverno/policies/require-non-root.yaml \
+              deploy/kyverno/policies/require-hardened-container.yaml \
+              deploy/kyverno/policies/require-resource-limits.yaml \
+              --resource "$f"
+          done
+
+      - name: Trivy config scan of the chart
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: deploy/helm/drydock
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck scripts/*.sh

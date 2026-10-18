@@ -1,0 +1,34 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "drydock.fullname" . }}
+  labels:
+    {{- include "drydock.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: drydock
+      rules:
+        - alert: DrydockCriticalFindingOpen
+          expr: sum by (project) (drydock_open_findings{severity="CRITICAL"}) > 0
+          for: {{ .Values.monitoring.rules.criticalOpenFor }}
+          labels:
+            severity: critical
+          annotations:
+            summary: "Critical vulnerability open in project {{ "{{ $labels.project }}" }}"
+            description: "{{ "{{ $value }}" }} critical finding(s) have been open for more than {{ .Values.monitoring.rules.criticalOpenFor }}."
+        - alert: DrydockScanStale
+          expr: time() - max by (project) (drydock_last_scan_timestamp_seconds) > {{ .Values.monitoring.rules.scanStaleSeconds }}
+          labels:
+            severity: warning
+          annotations:
+            summary: "No completed scan for project {{ "{{ $labels.project }}" }}"
+            description: "The last completed scan is older than {{ .Values.monitoring.rules.scanStaleSeconds }} seconds."
+        - alert: DrydockDown
+          expr: absent(up{job="{{ include "drydock.fullname" . }}"} == 1)
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Drydock is not being scraped or is down"
+{{- end }}

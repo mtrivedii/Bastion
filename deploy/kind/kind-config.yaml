@@ -1,0 +1,10 @@
+# Local cluster for Bastion. The default network plugin is turned off because
+# it does not enforce NetworkPolicy. Calico is installed instead (see the Makefile).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: bastion
+networking:
+  disableDefaultCNI: true
+  podSubnet: 192.168.0.0/16
+nodes:
+  - role: control-plane

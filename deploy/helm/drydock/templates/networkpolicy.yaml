@@ -1,0 +1,94 @@
+{{- if .Values.networkPolicy.enabled }}
+# Deny everything by default in the release's pods, then allow only what is needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "drydock.fullname" . }}-default-deny
+  labels:
+    {{- include "drydock.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "drydock.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "drydock.fullname" . }}-app
+  labels:
+    {{- include "drydock.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "drydock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.ingressNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: 8000
+          protocol: TCP
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    # OSV.dev over HTTPS. Private ranges and the cloud metadata address are excluded.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+      ports:
+        - {port: 443, protocol: TCP}
+    {{- if .Values.postgres.enabled }}
+    # The in-cluster database.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "drydock.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: database
+      ports:
+        - {port: 5432, protocol: TCP}
+    {{- end }}
+{{- if .Values.postgres.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "drydock.fullname" . }}-database
+  labels:
+    {{- include "drydock.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "drydock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: database
+  policyTypes: [Ingress, Egress]
+  # Only the app may connect, and the database may not start any connections.
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "drydock.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: app
+      ports:
+        - {port: 5432, protocol: TCP}
+{{- end }}
+{{- end }}

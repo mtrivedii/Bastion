@@ -1,0 +1,22 @@
+{{- if .Values.monitoring.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "drydock.fullname" . }}
+  labels:
+    {{- include "drydock.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "drydock.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.monitoring.interval }}
+      # /metrics needs the API key, sent as a bearer token.
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "drydock.secretName" . }}
+          key: api-key
+{{- end }}

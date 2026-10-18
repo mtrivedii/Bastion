@@ -1,0 +1,42 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Images need a version
+    policies.kyverno.io/description: >-
+      An image without a tag, or tagged latest, can change under a running
+      deployment. Require an explicit tag or a digest.
+spec:
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [drydock]
+      validate:
+        failureAction: Enforce
+        message: "Images must have an explicit tag or a digest."
+        pattern:
+          spec:
+            =(initContainers):
+              - image: "*:* | *@sha256:*"
+            containers:
+              - image: "*:* | *@sha256:*"
+    - name: no-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+              namespaces: [drydock]
+      validate:
+        failureAction: Enforce
+        message: "The 'latest' tag is not allowed."
+        pattern:
+          spec:
+            =(initContainers):
+              - image: "!*:latest"
+            containers:
+              - image: "!*:latest"

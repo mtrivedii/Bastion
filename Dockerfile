@@ -8,7 +8,8 @@ ENV PATH="/venv/bin:$PATH"
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip uninstall -y pip setuptools wheel
 
 # Runtime: copy only the venv, nothing else from the build stage.
 FROM python:3.12-slim
@@ -19,7 +20,13 @@ RUN groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid appuser --create-home --shell /usr/sbin/nologin appuser
 
 COPY --from=builder /venv /venv
-ENV PATH="/venv/bin:$PATH"
+ENV PATH="/venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# The runtime image does not need a package manager. Removing pip, setuptools
+# and wheel from the base image also removes the libraries they bundle.
+RUN /usr/local/bin/python -m pip uninstall -y pip setuptools wheel
 
 WORKDIR /app
 COPY app/ ./app/

@@ -9,6 +9,7 @@ spec:
   selector:
     matchLabels:
       {{- include "drydock.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: app
   template:
     metadata:
       labels:

@@ -6,20 +6,23 @@ on:
   pull_request:
     branches: [main]
 
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  ci:
+  test:
+    name: Lint, test, static analysis
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
     permissions:
-      contents: read    # checkout
-      packages: write   # push to GHCR
-      id-token: write   # OIDC token for keyless cosign signing
-
+      contents: read
     steps:
-      # 1. Checkout + Python
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -28,35 +31,41 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: requirements*.txt
 
-      - name: Install application dependencies
-        run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
 
       - name: Install CI tooling
         run: pip install ruff==0.17.1 bandit pip-audit
 
-      # 2. Lint
       - name: Lint (ruff)
         run: ruff check .
 
-      # 3. Tests
-      - name: Test (pytest)
-        run: pytest
+      - name: Lint Dockerfile (hadolint)
+        run: docker run --rm -i hadolint/hadolint hadolint --failure-threshold warning - < Dockerfile
 
-      # 4. Bandit -- static security analysis of Python source
-      - name: Security scan (bandit)
+      - name: Tests with coverage gate (pytest)
+        run: pytest --cov --cov-fail-under=90
+
+      - name: Static analysis (bandit)
         run: bandit -r app/
 
-      # 5. pip-audit -- dependency CVE check
       - name: Dependency audit (pip-audit)
-        run: pip-audit -r requirements.txt
+        run: pip-audit -r requirements-dev.txt
 
-      # 6. Docker build
-      # GHCR requires lowercase image names; github.repository preserves original casing.
-      - name: Lowercase image name
-        run: |
-          echo "IMAGE_NAME=$(echo '${{ github.repository }}' | \
-            tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+  image:
+    name: Build, scan, smoke test, DAST
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      IMAGE: bastion:ci
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -69,52 +78,167 @@ jobs:
           context: .
           push: false
           load: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ env.IMAGE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 7. Trivy -- only fail on fixable CVEs; unfixable base-image issues are reported but don't block.
+      # Fail only on fixable CRITICAL and HIGH issues. Unfixable base-image
+      # issues are reported by the weekly scheduled run but do not block.
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@v0.36.0
         env:
           TRIVY_SKIP_VERSION_CHECK: "true"
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          image-ref: ${{ env.IMAGE }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
           severity: CRITICAL,HIGH
 
-      # 8. Syft -- generate a CycloneDX SBOM from the image, uploaded as a workflow artifact.
-      # The format matches what this app's own /sboms endpoint accepts.
       - name: Generate SBOM (Syft)
         uses: anchore/sbom-action@v0.24.0
         with:
-          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          image: ${{ env.IMAGE }}
           artifact-name: sbom-${{ github.sha }}.cdx.json
           output-file: sbom.cdx.json
           format: cyclonedx-json
 
-      # 9 + 10. Push and sign -- main branch only, after all gates pass.
+      # The pipeline's SBOM goes into the app it is building: Drydock scans
+      # the SBOM of its own image. Report only, it does not block the build.
+      - name: Start the container
+        run: |
+          docker run -d --name drydock -p 8000:8000 \
+            -e DRYDOCK_API_KEY=ci-key -e DRYDOCK_RATE_LIMIT_PER_MINUTE=0 "$IMAGE"
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8000/health && exit 0
+            sleep 1
+          done
+          docker logs drydock
+          exit 1
+
+      - name: Check the container is locked down
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/sboms)" = "401"
+          test "$(docker exec drydock id -u)" != "0"
+          ! docker exec drydock sh -c 'command -v pip'
+
+      - name: Drydock scans its own SBOM
+        run: scripts/ci_self_scan.sh http://127.0.0.1:8000 ci-key sbom.cdx.json self-scan
+
+      - name: Stop the container
+        if: always()
+        run: docker rm -f drydock || true
+
+      # A second, throwaway container without the key so the scanner can reach the API.
+      - name: Start a target for ZAP
+        run: |
+          docker run -d --name zap-target -p 8001:8000 \
+            -e DRYDOCK_RATE_LIMIT_PER_MINUTE=0 "$IMAGE"
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8001/health && exit 0
+            sleep 1
+          done
+          docker logs zap-target
+          exit 1
+
+      - name: Let ZAP write its report
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE"
+
+      - name: OWASP ZAP API scan
+        uses: zaproxy/action-api-scan@v0.10.0
+        with:
+          target: http://127.0.0.1:8001/openapi.json
+          format: openapi
+          rules_file_name: .zap/rules.tsv
+          fail_action: false
+          allow_issue_writing: false
+          artifact_name: zap-report
+
+      - name: Stop the ZAP target
+        if: always()
+        run: docker rm -f zap-target || true
+
+      - name: Save image and reports
+        run: docker save "$IMAGE" -o image.tar
+
+      - name: Upload image for publishing
+        uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: image.tar
+          retention-days: 1
+
+      - name: Upload self-scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-scan
+          path: |
+            self-scan-findings.json
+            self-scan-summary.json
+            sbom.cdx.json
+
+  publish:
+    name: Push, sign, attest
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write   # push to GHCR
+      id-token: write   # OIDC token for keyless cosign signing
+    steps:
+      - name: Download image and SBOM
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Load image
+        run: docker load -i artifacts/image/image.tar
+
+      - name: Work out the image name
+        run: |
+          echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Log in to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push image to GHCR
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+      - name: Push image
+        id: push
+        run: |
+          ref="${REGISTRY}/${IMAGE_NAME}:${{ github.sha }}"
+          docker tag bastion:ci "$ref"
+          docker push "$ref"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: sigstore/cosign-installer@v4.1.2
 
-      - name: Sign image (keyless OIDC)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # Everything below works on the digest, not the tag, so what is signed is exactly what was pushed.
+      - name: Sign the image (keyless)
+        run: cosign sign --yes "${{ steps.push.outputs.digest }}"
+
+      - name: Attach the SBOM as a signed attestation
         run: |
-          cosign sign --yes \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cosign attest --yes --type cyclonedx \
+            --predicate artifacts/self-scan/sbom.cdx.json "${{ steps.push.outputs.digest }}"
+
+      - name: Verify what was just signed
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${{ steps.push.outputs.digest }}" >/dev/null
+          {
+            echo "### Published image"
+            echo
+            echo '`${{ steps.push.outputs.digest }}`'
+            echo
+            echo "Signed with Cosign (keyless) and verified. The CycloneDX SBOM is attached as an attestation."
+          } >> "$GITHUB_STEP_SUMMARY"

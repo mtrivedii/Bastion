@@ -1,0 +1,2 @@
+# ZAP rule overrides: <rule id>	<IGNORE|WARN|FAIL>	<reason>
+# Empty on purpose. Add a line only after reading the finding.

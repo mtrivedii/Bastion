@@ -1,0 +1,9 @@
+# Accepted risks, each with the reason. Review when the design changes.
+
+# The Kubernetes API endpoint is public so that a laptop can reach it without a VPN or bastion host.
+# Access is limited to var.api_allowed_cidrs (your own address), which has no default and must be set.
+AWS-0040
+
+# Worker nodes need outbound access to pull images and for the app to reach api.osv.dev.
+# Egress is further limited inside the cluster by the chart's NetworkPolicy.
+AWS-0104

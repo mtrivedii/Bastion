@@ -101,6 +101,8 @@ jobs:
           scan-type: config
           scan-ref: infra/terraform
           severity: HIGH,CRITICAL
+          skip-dirs: infra/terraform/.terraform/modules/eks/examples
+          trivyignores: infra/terraform/.trivyignore
           format: json
           output: ${{ github.workspace }}/trivy-tf.json
           exit-code: "0"

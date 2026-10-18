@@ -4,7 +4,7 @@ A secure delivery platform built around a small app called Drydock. Drydock take
 
 The app is small on purpose. The point of the project is the pipeline and the security controls around it: every build is linted, tested, scanned, turned into an SBOM, signed and only then published. The pipeline produces SBOMs in the same format that Drydock accepts.
 
-**Status:** the app, pipeline, Helm chart, admission policies, monitoring and a threat model are done and checked in CI. The Helm chart and policies have been validated (lint, schema check, policy tests) but not yet run on a live cluster by me. Terraform for an optional AWS cluster is written and validated but has never been applied. See [What is tested and what is not](#what-is-tested-and-what-is-not).
+**Status:** the app, pipeline, Helm chart, admission policies, monitoring and a threat model are done and checked in CI. The Helm chart and policies are validated in CI and are also installed on a real kind cluster (with Calico and Kyverno) by the `Cluster test (kind)` workflow, which runs the demo and checks that an unsafe pod is refused. Terraform for an optional AWS cluster is written and validated but has never been applied. See [What is tested and what is not](#what-is-tested-and-what-is-not).
 
 ## What Drydock does
 
@@ -110,8 +110,8 @@ To run all of it on your own computer for free, follow [docs/RUNBOOK.md](docs/RU
 |---|---|
 | App | 76 tests, 97 percent coverage, run in CI |
 | Container, pipeline, signing | Run on GitHub Actions on every push to main |
-| Helm chart | `helm lint`, render, schema check and policy checks in CI. **Not installed on a live cluster by me** |
-| Kyverno policies | CLI tests in CI. **Not installed on a live cluster by me** |
+| Helm chart | `helm lint`, render, schema check and policy checks in CI. Installed on a kind cluster with Postgres in CI, and the demo runs against it |
+| Kyverno policies | CLI tests in CI. Installed on the kind cluster in CI: an `nginx:latest` pod is rejected and the chart's own pods still pass after a restart |
 | Terraform | `fmt`, `validate`, Trivy in CI. **Never applied** |
 | Argo CD, Grafana dashboard | Written, **not run** |
 | Scan against the real OSV.dev | The tests fake OSV.dev. The CI self-scan and `scripts/demo.sh` use the real one |

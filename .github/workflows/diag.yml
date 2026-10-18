@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t bastion:diag .
+      - run: docker build -t bastion:diag . && docker run -d --name d -p 8000:8000 bastion:diag && sleep 5 && curl -fsS http://127.0.0.1:8000/health
       - uses: aquasecurity/trivy-action@v0.36.0
         env:
           TRIVY_SKIP_VERSION_CHECK: "true"

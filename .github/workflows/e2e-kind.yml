@@ -1,0 +1,107 @@
+name: Cluster test (kind)
+
+# Runs the same steps as docs/RUNBOOK.md on a throwaway kind cluster:
+# build the image, install the chart, run the seed-and-fix demo against it,
+# then add Kyverno and check the policies on a live cluster.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "scripts/demo.sh"
+      - "Dockerfile"
+      - "app/**"
+      - ".github/workflows/e2e-kind.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    name: Chart, demo and policies on kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Install kind
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+
+      - name: Create the cluster with Calico (enforces NetworkPolicy)
+        run: |
+          set -euo pipefail
+          kind create cluster --config deploy/kind/kind-config.yaml
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
+          kubectl -n kube-system rollout status daemonset/calico-node --timeout=300s
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+      - name: Build the image and load it into the cluster
+        run: |
+          docker build -t ghcr.io/mtrivedii/bastion:local .
+          kind load docker-image ghcr.io/mtrivedii/bastion:local --name bastion
+
+      - name: Install the chart
+        run: |
+          helm upgrade --install drydock deploy/helm/drydock \
+            --namespace drydock --create-namespace \
+            -f deploy/helm/drydock/values-kind.yaml --wait --timeout 5m
+          kubectl -n drydock get pods
+
+      - name: Seed-and-fix demo against the cluster
+        run: |
+          kubectl -n drydock port-forward svc/drydock 8000:80 >/tmp/pf.log 2>&1 &
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/health && break; sleep 2; done
+          key=$(kubectl -n drydock get secret drydock -o jsonpath='{.data.api-key}' | base64 -d)
+          DRYDOCK_API_KEY="$key" scripts/demo.sh
+
+      - name: Calls without the API key are refused
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/sboms)
+          echo "status without key: $code"
+          [ "$code" = "401" ]
+
+      - name: Install Kyverno and the policies
+        run: |
+          helm repo add kyverno https://kyverno.github.io/kyverno/
+          helm upgrade --install kyverno kyverno/kyverno --namespace kyverno --create-namespace --wait --timeout 8m
+          kubectl apply \
+            -f deploy/kyverno/policies/disallow-latest-tag.yaml \
+            -f deploy/kyverno/policies/require-non-root.yaml \
+            -f deploy/kyverno/policies/require-hardened-container.yaml \
+            -f deploy/kyverno/policies/require-resource-limits.yaml
+          sleep 10
+          kubectl get clusterpolicy
+
+      - name: An unsafe pod is refused
+        run: |
+          if kubectl -n drydock run bad --image=nginx:latest 2>/tmp/bad.txt; then
+            echo "the unsafe pod was admitted"; exit 1
+          fi
+          cat /tmp/bad.txt
+
+      - name: The chart's own pods still pass admission after a restart
+        run: |
+          kubectl -n drydock rollout restart deployment/drydock
+          kubectl -n drydock rollout status deployment/drydock --timeout=180s
+          kubectl -n drydock get pods
+
+      - name: Cluster state on failure
+        if: failure()
+        run: |
+          {
+            kubectl get pods -A
+            kubectl -n drydock describe pods | tail -60
+            kubectl -n drydock logs deploy/drydock --tail=40
+            kubectl get events -A --sort-by=.lastTimestamp | tail -25
+          } > /tmp/diag.txt 2>&1 || true
+          msg=$(head -c 3500 /tmp/diag.txt | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+          echo "::error title=cluster state::${msg}"

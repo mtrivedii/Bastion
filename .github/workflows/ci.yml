@@ -213,7 +213,10 @@ jobs:
         run: |
           ref="${REGISTRY}/${IMAGE_NAME}:${{ github.sha }}"
           docker tag bastion:ci "$ref"
-          docker push "$ref"
+          if ! docker push "$ref" > push.log 2>&1; then
+            echo "::error title=docker push::$(tail -c 800 push.log | tr '\n' ' ')"
+            exit 1
+          fi
           digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$ref")
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 

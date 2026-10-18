@@ -1,5 +1,5 @@
 # Builder: install dependencies into an isolated virtualenv.
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 WORKDIR /build
 
@@ -13,7 +13,7 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip uninstall -y pip setuptools wheel
 
 # Runtime: copy only the venv, nothing else from the build stage.
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Non-root by default -- Phase 2's Kyverno policy blocks root containers,
 # so the image needs to already run this way, not be retrofitted later.

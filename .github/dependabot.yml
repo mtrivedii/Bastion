@@ -22,3 +22,6 @@ updates:
     directory: /infra/terraform
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

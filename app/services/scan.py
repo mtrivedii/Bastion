@@ -1,5 +1,4 @@
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +7,7 @@ from app.db import Finding, Package, SBOMSubmission, Vulnerability
 from app.osv_client import OSVClient
 
 
-def _extract_severity(details: dict) -> Optional[str]:
+def _extract_severity(details: dict) -> str | None:
     # OSV records list severity as [{"type": "CVSS_V3", "score": "..."}].
     # Taking the first entry is a simplification -- good enough to show a
     # number in the findings report, not a substitute for real CVSS parsing.
@@ -43,9 +42,9 @@ async def run_scan(submission_id: int, db: AsyncSession, osv_client: OSVClient) 
             ]
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
-        for package, vuln_ids in zip(queryable, vuln_id_lists):
+        for package, vuln_ids in zip(queryable, vuln_id_lists, strict=True):
             found_ids = set(vuln_ids)
 
             for vuln_id in found_ids:

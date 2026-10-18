@@ -1,5 +1,4 @@
 import json
-from typing import Optional
 
 # Maps a purl "type" segment (pkg:<type>/...) to the ecosystem name OSV.dev
 # expects in query requests. Only ecosystems OSV.dev actually indexes are
@@ -21,7 +20,7 @@ class InvalidSBOMError(Exception):
     """Raised when the uploaded file isn't a parseable CycloneDX SBOM."""
 
 
-def _ecosystem_from_purl(purl: Optional[str]) -> Optional[str]:
+def _ecosystem_from_purl(purl: str | None) -> str | None:
     if not purl or not purl.startswith("pkg:"):
         return None
     # purl format: pkg:type/namespace/name@version?qualifiers#subpath

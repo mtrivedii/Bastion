@@ -33,7 +33,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Install CI tooling
-        run: pip install ruff bandit pip-audit
+        run: pip install ruff==0.17.1 bandit pip-audit
 
       # 2. Lint
       - name: Lint (ruff)

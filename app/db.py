@@ -1,8 +1,7 @@
 import os
 from datetime import datetime
-from typing import Optional
 
-from sqlalchemy import ForeignKey, String, DateTime, Integer, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     async_sessionmaker,
@@ -33,7 +32,7 @@ class SBOMSubmission(Base):
     )
     package_count: Mapped[int] = mapped_column(Integer, default=0)
     scan_status: Mapped[str] = mapped_column(String(20), default="pending")
-    last_scanned_at: Mapped[Optional[datetime]] = mapped_column(
+    last_scanned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 
@@ -51,8 +50,8 @@ class Package(Base):
     version: Mapped[str] = mapped_column(String(100))
     # None when the SBOM component's purl doesn't map to a known OSV.dev
     # ecosystem. Such packages are stored but skipped during scanning.
-    ecosystem: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    purl: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    ecosystem: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    purl: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     submission: Mapped["SBOMSubmission"] = relationship(back_populates="packages")
     findings: Mapped[list["Finding"]] = relationship(
@@ -71,7 +70,7 @@ class Vulnerability(Base):
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
     summary: Mapped[str] = mapped_column(String(2000), default="")
-    severity: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    severity: Mapped[str | None] = mapped_column(String(50), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
@@ -84,7 +83,7 @@ class Finding(Base):
     discovered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     # Set when a later scan no longer reports this vuln for the package.
     # This is the field the Phase 5 time-to-remediate metric comes from.
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(
+    resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
 

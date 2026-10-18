@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -24,13 +23,13 @@ class FindingOut(BaseModel):
     package_version: str
     vuln_id: str
     summary: str
-    severity: Optional[str]
+    severity: str | None
     discovered_at: datetime
-    resolved_at: Optional[datetime]
+    resolved_at: datetime | None
 
 
 class FindingsReportOut(BaseModel):
     submission_id: int
     scan_status: str
-    last_scanned_at: Optional[datetime]
+    last_scanned_at: datetime | None
     findings: list[FindingOut]

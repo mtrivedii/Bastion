@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import Finding, Package, SBOMSubmission, Vulnerability, get_db, init_db
 from app.models import FindingOut, FindingsReportOut, SBOMSubmissionOut, ScanTriggerOut
 from app.osv_client import OSVClient
-from app.services.scan import run_scan
 from app.services.sbom import InvalidSBOMError, parse_cyclonedx
+from app.services.scan import run_scan
 
 osv_client = OSVClient()
 
@@ -36,7 +36,7 @@ async def upload_sbom(
     try:
         parsed_packages = parse_cyclonedx(raw)
     except InvalidSBOMError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     submission = SBOMSubmission(filename=file.filename, package_count=len(parsed_packages))
     db.add(submission)

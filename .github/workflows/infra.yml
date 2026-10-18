@@ -49,7 +49,12 @@ jobs:
           kubeconform -strict -summary -ignore-missing-schemas out/full.yaml
 
       - name: Kyverno policy tests
-        run: kyverno test deploy/kyverno/tests
+        run: |
+          if ! kyverno test deploy/kyverno/tests > kyverno-test.log 2>&1; then
+            msg=$(head -c 3500 kyverno-test.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=kyverno test::${msg}"
+            exit 1
+          fi
 
       - name: Rendered chart must pass the admission policies
         run: |

@@ -3,9 +3,9 @@ name: Infrastructure checks
 on:
   push:
     branches: [main]
-    paths: ["deploy/**", "scripts/**", "Makefile", ".github/workflows/infra.yml"]
+    paths: ["deploy/**", "infra/**", "scripts/**", "Makefile", ".github/workflows/infra.yml"]
   pull_request:
-    paths: ["deploy/**", "scripts/**", "Makefile"]
+    paths: ["deploy/**", "infra/**", "scripts/**", "Makefile"]
   workflow_dispatch:
 
 permissions:
@@ -80,3 +80,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: shellcheck scripts/*.sh
+
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: infra/terraform
+          severity: HIGH,CRITICAL
+          exit-code: "1"

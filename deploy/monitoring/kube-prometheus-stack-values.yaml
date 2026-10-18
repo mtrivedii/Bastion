@@ -1,0 +1,18 @@
+# Small values for kube-prometheus-stack on a laptop-sized cluster.
+# helm install monitoring prometheus-community/kube-prometheus-stack -n monitoring --create-namespace -f this-file
+prometheus:
+  prometheusSpec:
+    retention: 3d
+    resources:
+      requests: {cpu: 100m, memory: 400Mi}
+    # Pick up ServiceMonitors and rules from any namespace, not only ones with the stack's label.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+alertmanager:
+  enabled: false
+grafana:
+  adminPassword: change-me-locally
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard

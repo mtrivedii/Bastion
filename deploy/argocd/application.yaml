@@ -1,0 +1,29 @@
+# GitOps: Argo CD watches this repository and keeps the cluster in line with it.
+# Install Argo CD first (see docs/RUNBOOK.md), then: kubectl apply -f deploy/argocd/application.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: drydock
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mtrivedii/Bastion.git
+    targetRevision: main
+    path: deploy/helm/drydock
+    helm:
+      valueFiles:
+        - values.yaml
+      # Pin the image by digest here after each release.
+      # parameters:
+      #   - name: image.digest
+      #     value: sha256:...
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: drydock
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

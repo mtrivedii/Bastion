@@ -6,7 +6,7 @@ NAMESPACE ?= drydock
 IMAGE     ?= ghcr.io/mtrivedii/bastion:local
 CALICO    ?= https://raw.githubusercontent.com/projectcalico/calico/v3.28.2/manifests/calico.yaml
 
-.PHONY: help test lint run image kind-up kind-down kind-load deploy undeploy kyverno policies forward demo-k8s
+.PHONY: monitoring help test lint run image kind-up kind-down kind-load deploy undeploy kyverno policies forward demo-k8s
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*## /\t/'
@@ -61,3 +61,11 @@ forward: ## Forward the API to http://127.0.0.1:8000
 
 demo-k8s: ## Run the seed-and-fix demo against the cluster (run `make forward` in another terminal)
 	DRYDOCK_API_KEY=$$(kubectl -n $(NAMESPACE) get secret drydock -o jsonpath='{.data.api-key}' | base64 -d) scripts/demo.sh
+
+monitoring: ## Install Prometheus and Grafana, plus the Drydock dashboard
+	helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+	helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
+	  --namespace monitoring --create-namespace -f deploy/monitoring/kube-prometheus-stack-values.yaml --wait --timeout 10m
+	kubectl -n monitoring create configmap drydock-dashboard \
+	  --from-file=drydock.json=deploy/monitoring/grafana-dashboard.json --dry-run=client -o yaml \
+	  | kubectl label --local -f - grafana_dashboard=1 -o yaml | kubectl apply -f -

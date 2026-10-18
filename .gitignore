@@ -11,3 +11,9 @@ venv/
 *.db
 .pytest_cache/
 .ruff_cache/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars

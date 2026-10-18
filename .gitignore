@@ -6,3 +6,8 @@ venv/
 .env
 .DS_Store
 .vscode/
+
+# local database and tool caches
+*.db
+.pytest_cache/
+.ruff_cache/

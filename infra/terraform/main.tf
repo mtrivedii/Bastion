@@ -42,7 +42,7 @@ module "vpc" {
 
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "~> 21.29"
+  version = "~> 20.24"
 
   cluster_name    = var.name
   cluster_version = var.kubernetes_version

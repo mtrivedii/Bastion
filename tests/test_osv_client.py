@@ -72,3 +72,51 @@ async def test_client_error_is_not_retried():
         await client.query_batch([{"name": "x", "version": "1", "ecosystem": "PyPI"}])
     await client.close()
     assert route.call_count == 1
+
+
+@respx.mock
+async def test_query_batch_follows_next_page_token():
+    def reply(request: httpx.Request) -> httpx.Response:
+        import json
+
+        queries = json.loads(request.content)["queries"]
+        token = queries[0].get("page_token")
+        if token is None:
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"vulns": [{"id": "GHSA-1"}], "next_page_token": "p2"},
+                        {"vulns": [{"id": "GHSA-other"}]},
+                    ]
+                },
+            )
+        if token == "p2":
+            return httpx.Response(200, json={"results": [{"vulns": [{"id": "GHSA-2"}], "next_page_token": "p3"}]})
+        return httpx.Response(200, json={"results": [{"vulns": [{"id": "GHSA-3"}]}]})
+
+    respx.post("https://api.osv.dev/v1/querybatch").mock(side_effect=reply)
+    client = OSVClient()
+    result = await client.query_batch(
+        [
+            {"name": "big", "version": "1.0", "ecosystem": "PyPI"},
+            {"name": "small", "version": "1.0", "ecosystem": "PyPI"},
+        ]
+    )
+    await client.close()
+    assert result == [["GHSA-1", "GHSA-2", "GHSA-3"], ["GHSA-other"]]
+
+
+@respx.mock
+async def test_page_following_stops_at_the_safety_limit():
+    route = respx.post("https://api.osv.dev/v1/querybatch").mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"vulns": [{"id": "GHSA-x"}], "next_page_token": "again"}]}
+        )
+    )
+    client = OSVClient()
+    result = await client.query_batch([{"name": "loop", "version": "1.0", "ecosystem": "PyPI"}])
+    await client.close()
+    # One normal call plus the capped number of follow-up pages.
+    assert route.call_count == 1 + 50
+    assert len(result[0]) == 51

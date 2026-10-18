@@ -1,0 +1,7 @@
+[run]
+source = app
+concurrency = greenlet,thread
+
+[report]
+show_missing = true
+skip_empty = true

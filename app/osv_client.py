@@ -11,6 +11,9 @@ OSV_BASE_URL = "https://api.osv.dev"
 # Hard limit enforced by OSV.dev's own API for a single /v1/querybatch call.
 MAX_QUERIES_PER_BATCH = 1000
 
+# Safety stop for result paging, so a misbehaving server cannot keep us looping.
+MAX_PAGES_PER_QUERY = 50
+
 
 class OSVServerError(Exception):
     """Raised for 5xx responses from OSV.dev. These are treated as
@@ -18,10 +21,6 @@ class OSVServerError(Exception):
     since retrying an invalid query wastes calls without changing the
     outcome.
     """
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    return isinstance(exc, (httpx.TimeoutException, OSVServerError))
 
 
 class OSVClient:
@@ -59,6 +58,21 @@ class OSVClient:
         response.raise_for_status()
         return response.json()
 
+    async def _remaining_pages(self, query: dict, page_token: str) -> list[str]:
+        """Follows next_page_token for one query and returns the extra vulnerability IDs."""
+        extra: list[str] = []
+        for _ in range(MAX_PAGES_PER_QUERY):
+            data = await self._post(
+                "/v1/querybatch", {"queries": [{**query, "page_token": page_token}]}
+            )
+            results = data.get("results") or [{}]
+            result = results[0]
+            extra.extend(v["id"] for v in result.get("vulns", []))
+            page_token = result.get("next_page_token")
+            if not page_token:
+                break
+        return extra
+
     async def query_batch(self, packages: list[dict]) -> list[list[str]]:
         """Query OSV.dev for known vulnerabilities affecting each package.
 
@@ -68,11 +82,9 @@ class OSVClient:
 
         Note: /v1/querybatch only returns bare vulnerability IDs, not full
         details -- call get_vuln_details() to hydrate any ID you haven't
-        seen before. Also note: OSV.dev paginates further results per
-        query via page_token if a single package has an unusually large
-        number of vulnerabilities; that pagination isn't handled here, so
-        an extremely vulnerable package could show a truncated list. Fine
-        for this project's scale, worth knowing if reused elsewhere.
+        seen before. When a package has more results than fit in one
+        response, OSV.dev returns a next_page_token; the remaining pages are
+        fetched here so the list is complete.
         """
         results: list[list[str]] = []
         for start in range(0, len(packages), MAX_QUERIES_PER_BATCH):
@@ -85,8 +97,13 @@ class OSVClient:
                 for pkg in chunk
             ]
             data = await self._post("/v1/querybatch", {"queries": queries})
-            for result in data.get("results", []):
-                results.append([v["id"] for v in result.get("vulns", [])])
+            batch_results = data.get("results", [])
+            for query, result in zip(queries, batch_results, strict=False):
+                ids = [v["id"] for v in result.get("vulns", [])]
+                token = result.get("next_page_token")
+                if token:
+                    ids.extend(await self._remaining_pages(query, token))
+                results.append(ids)
         return results
 
     async def get_vuln_details(self, vuln_id: str) -> dict:

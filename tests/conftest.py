@@ -1,3 +1,4 @@
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -5,6 +6,7 @@ from sqlalchemy.pool import StaticPool
 from app import db as db_module
 from app.db import Base
 from app.main import app
+from app.security import limiter
 
 
 @pytest_asyncio.fixture
@@ -44,3 +46,10 @@ async def db_session_factory():
     db_module.AsyncSessionLocal = original_session_local
     app.dependency_overrides.clear()
     await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    limiter.reset()
+    yield
+    limiter.reset()

@@ -19,7 +19,8 @@ api() { curl -fsS "${auth[@]}" "$@"; }
 
 scan() {
   local file="$1" id status
-  id=$(api -F "file=@${file}" "${BASE}/sboms?project=${PROJECT}" | jq -r .id)
+  id=$(api -F "file=@${file}" "${BASE}/sboms?project=${PROJECT}" | jq -r '.id // empty')
+  [ -n "${id}" ] || { echo "upload of ${file} failed" >&2; return 1; }
   api -X POST "${BASE}/sboms/${id}/scan" >/dev/null
   for _ in $(seq 1 90); do
     status=$(api "${BASE}/sboms/${id}/findings" | jq -r .scan_status)
@@ -32,7 +33,7 @@ scan() {
 }
 
 echo "1. Uploading and scanning the vulnerable SBOM (PyYAML 5.3)"
-first=$(scan "${HERE}/demo/seed_vulnerable_sbom.json")
+first=$(scan "${HERE}/demo/seed_vulnerable_sbom.json") || exit 1
 open=$(api "${BASE}/sboms/${first}/findings?state=open" | jq '.findings | length')
 echo "   open findings: ${open}"
 [ "${open}" -gt 0 ] || { echo "expected findings for PyYAML 5.3" >&2; exit 1; }
@@ -40,7 +41,7 @@ api "${BASE}/sboms/${first}/findings?state=open" \
   | jq -r '.findings[] | "   \(.severity)\t\(.cvss_score // "-")\t\(.vuln_id)\t\(.summary)"' | head -5
 
 echo "2. Uploading and scanning the fixed SBOM (PyYAML 6.0)"
-second=$(scan "${HERE}/demo/seed_fixed_sbom.json")
+second=$(scan "${HERE}/demo/seed_fixed_sbom.json") || exit 1
 still_open=$(api "${BASE}/sboms/${second}/findings?state=open" | jq '.findings | length')
 resolved=$(api "${BASE}/sboms/${first}/findings?state=resolved" | jq '.findings | length')
 echo "   open in the new submission: ${still_open}, resolved from the old one: ${resolved}"

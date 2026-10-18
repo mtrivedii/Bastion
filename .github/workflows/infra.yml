@@ -101,4 +101,14 @@ jobs:
           scan-type: config
           scan-ref: infra/terraform
           severity: HIGH,CRITICAL
-          exit-code: "1"
+          format: json
+          output: ${{ github.workspace }}/trivy-tf.json
+          exit-code: "0"
+      - name: Fail on findings
+        run: |
+          n=$(jq '[.Results[]?.Misconfigurations[]?]|length' "$GITHUB_WORKSPACE/trivy-tf.json")
+          if [ "$n" -gt 0 ]; then
+            msg=$(jq -r '.Results[]?|.Target as $t|.Misconfigurations[]?|"\($t) \(.ID) \(.Severity) \(.Title) :: \(.CauseMetadata.StartLine // "?")"' "$GITHUB_WORKSPACE/trivy-tf.json" | head -c 3000 | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+            echo "::error title=trivy terraform::${msg}"
+            exit 1
+          fi

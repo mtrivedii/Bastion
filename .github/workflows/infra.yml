@@ -2,7 +2,7 @@ name: Infrastructure checks
 
 on:
   push:
-    branches: [main, ci-test]
+    branches: [main]
     paths: ["deploy/**", "scripts/**", "Makefile", ".github/workflows/infra.yml"]
   pull_request:
     paths: ["deploy/**", "scripts/**", "Makefile"]

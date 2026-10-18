@@ -26,7 +26,7 @@ ENV PATH="/venv/bin:$PATH" \
 
 # The runtime image does not need a package manager. Removing pip, setuptools
 # and wheel from the base image also removes the libraries they bundle.
-RUN python -m pip uninstall -y pip setuptools wheel
+RUN /usr/local/bin/python -m pip uninstall -y pip setuptools wheel
 
 WORKDIR /app
 COPY app/ ./app/

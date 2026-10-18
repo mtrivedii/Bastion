@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
-          curl -fsSL https://github.com/kyverno/kyverno/releases/download/v1.12.6/kyverno-cli_v1.12.6_linux_x86_64.tar.gz | tar xz kyverno
+          curl -fsSL https://github.com/kyverno/kyverno/releases/download/v1.13.4/kyverno-cli_v1.13.4_linux_x86_64.tar.gz | tar xz kyverno
           sudo mv kubeconform kyverno /usr/local/bin/
 
       - name: helm lint

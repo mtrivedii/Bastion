@@ -1,0 +1,30 @@
+name: Diag
+on:
+  push:
+    branches: [ci-diag]
+jobs:
+  trivy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t bastion:diag .
+      - name: Run
+        run: |
+          OUT=$(docker run -d --name bastiond -p 8000:8000 bastion:diag 2>&1) || { echo "::error title=run-error::$(echo "$OUT" | tr '\n' ' ')"; exit 1; }
+          sleep 8
+          curl -fsS http://127.0.0.1:8000/health || { L=$(docker logs bastiond 2>&1 | tail -15 | sed ':a;N;$!ba;s/\n/%0A/g'); echo "::error title=container-logs::$L"; docker ps -a --format '{{.Status}}' | head -2; exit 1; }
+      - uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_SKIP_VERSION_CHECK: "true"
+        with:
+          image-ref: bastion:diag
+          format: json
+          output: trivy.json
+          exit-code: "0"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+      - name: Summarise
+        run: |
+          MSG=$(jq -r '[.Results[]? | .Target as $t | (.Vulnerabilities // [])[] | "\($t) | \(.PkgName) \(.InstalledVersion) fixed=\(.FixedVersion) \(.VulnerabilityID) \(.Severity)"] | join("%0A")' trivy.json)
+          echo "::error title=trivy-findings::${MSG:-none}"

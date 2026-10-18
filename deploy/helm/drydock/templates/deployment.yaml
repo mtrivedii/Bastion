@@ -54,7 +54,7 @@ spec:
             - name: DRYDOCK_RATE_LIMIT_PER_MINUTE
               value: {{ .Values.config.rateLimitPerMinute | quote }}
             - name: DRYDOCK_MAX_UPLOAD_BYTES
-              value: {{ .Values.config.maxUploadBytes | quote }}
+              value: {{ .Values.config.maxUploadBytes | int64 | toString | quote }}
             - name: DRYDOCK_MAX_PACKAGES
               value: {{ .Values.config.maxPackages | quote }}
           startupProbe:

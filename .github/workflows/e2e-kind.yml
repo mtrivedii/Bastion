@@ -75,7 +75,7 @@ jobs:
       - name: Install Kyverno and the policies
         run: |
           helm repo add kyverno https://kyverno.github.io/kyverno/
-          helm upgrade --install kyverno kyverno/kyverno --namespace kyverno --create-namespace --wait --timeout 8m
+          helm upgrade --install kyverno kyverno/kyverno --namespace kyverno --create-namespace --wait --timeout 8m 2>&1 | tee /tmp/kyverno-install.txt
           kubectl apply \
             -f deploy/kyverno/policies/disallow-latest-tag.yaml \
             -f deploy/kyverno/policies/require-non-root.yaml \
@@ -101,9 +101,9 @@ jobs:
         if: failure()
         run: |
           {
-            kubectl -n drydock logs -l app.kubernetes.io/component=app --tail=40
-            kubectl -n drydock get pods
-            kubectl get events -A --sort-by=.lastTimestamp | tail -25
+            tail -15 /tmp/kyverno-install.txt
+            kubectl -n kyverno get pods
+            kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp | tail -12 | cut -c1-260
           } > /tmp/diag.txt 2>&1 || true
           msg=$(head -c 3500 /tmp/diag.txt | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
           echo "::error title=cluster state::${msg}"

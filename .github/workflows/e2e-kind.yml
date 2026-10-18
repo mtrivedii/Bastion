@@ -61,7 +61,19 @@ jobs:
           kubectl -n drydock port-forward svc/drydock 8000:80 >/tmp/pf.log 2>&1 &
           for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/health && break; sleep 2; done
           key=$(kubectl -n drydock get secret drydock -o jsonpath='{.data.api-key}' | base64 -d)
-          DRYDOCK_API_KEY="$key" scripts/demo.sh
+          if ! DRYDOCK_API_KEY="$key" scripts/demo.sh > /tmp/demo.txt 2>&1; then
+            {
+              cat /tmp/demo.txt
+              echo "--- drydock logs"
+              kubectl -n drydock logs deploy/drydock --tail=30
+              echo "--- network policies"
+              kubectl -n drydock get networkpolicy
+            } > /tmp/demo-diag.txt 2>&1
+            msg=$(head -c 3500 /tmp/demo-diag.txt | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+            echo "::error title=demo failed::${msg}"
+            exit 1
+          fi
+          cat /tmp/demo.txt
 
       - name: Calls without the API key are refused
         run: |
@@ -98,9 +110,8 @@ jobs:
         if: failure()
         run: |
           {
-            kubectl get pods -A
-            kubectl -n drydock describe pods | tail -60
             kubectl -n drydock logs deploy/drydock --tail=40
+            kubectl -n drydock get pods
             kubectl get events -A --sort-by=.lastTimestamp | tail -25
           } > /tmp/diag.txt 2>&1 || true
           msg=$(head -c 3500 /tmp/diag.txt | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')

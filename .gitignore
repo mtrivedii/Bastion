@@ -20,3 +20,6 @@ terraform.tfvars
 
 # Personal notes, not part of the project
 PROJECT_CONTEXT.md
+
+# Test coverage data
+.coverage

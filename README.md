@@ -118,9 +118,9 @@ To run all of it on your own computer for free, follow [docs/RUNBOOK.md](docs/RU
 
 ## Threat model
 
-[THREAT_MODEL.md](THREAT_MODEL.md) is a STRIDE analysis of the app and the pipeline: 18 findings, of which 5 are mitigated, 7 are accepted, 5 are open and 1 is partial. It only covers what exists today and lists the later phases as not yet modelled.
+[THREAT_MODEL.md](THREAT_MODEL.md) is a STRIDE analysis of the app and the pipeline: 18 findings. After the second revision (section 7 of the document): 7 are mitigated (two of them only for a single process), 6 are partially mitigated, 4 are accepted and 1 is open (no audit log). It only covers what exists today and lists the later phases as not yet modelled.
 
-[LEARNING_LOG.md](LEARNING_LOG.md) records design decisions and the bugs found along the way.
+[LEARNING_LOG.md](LEARNING_LOG.md) records design decisions and the bugs found along the way. [SECURITY.md](SECURITY.md) explains how to report a vulnerability. The code is released under the [MIT licence](LICENSE).
 
 ## Known limits
 

@@ -146,3 +146,5 @@ Dockerfile      multi-stage, non-root image
 THREAT_MODEL.md STRIDE analysis
 LEARNING_LOG.md Design decisions and bugs
 ```
+
+New to the project? Start with [docs/RUNBOOK.md](docs/RUNBOOK.md).
